@@ -1,0 +1,1 @@
+"""Sub-module to define architectures of Variational Auto-Encoders"""
