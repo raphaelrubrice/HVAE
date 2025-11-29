@@ -60,6 +60,108 @@ def sample_vmf(mu, kappa, batch_size):
     
     return torch.stack(samples)
 
+def batch_sample_vmf(mu, kappa, batch_size):
+    """
+    Sample from a von Mises–Fisher distribution in dimension m with batch.
+    """
+    device = mu.device
+    dtype = mu.dtype
+
+    assert mu.dim() == 2, "Expected mu of shape (batch_size, m)"
+    B, m = mu.shape
+    assert B == batch_size, "batch_size must match mu.shape[0]"
+
+    kappa = kappa.view(B).to(device=device, dtype=dtype)
+
+    # 2D special case
+    if m == 2:
+        eps = 1e-8
+        mu_angle = torch.atan2(mu[:, 1], mu[:, 0])
+        noise = torch.randn(B, device=device, dtype=dtype) / (kappa + eps)
+
+        uniform_angles = 2 * torch.pi * torch.rand(B, device=device, dtype=dtype)
+        concentrated_angles = mu_angle + noise
+
+        use_concentrated = kappa > 0
+        angles = torch.where(use_concentrated, concentrated_angles, uniform_angles)
+
+        x = torch.cos(angles)
+        y = torch.sin(angles)
+        return torch.stack([x, y], dim=-1)
+
+    # Ulrich algorithm
+    m_minus_1 = m - 1.0
+    uniform_mask = (kappa <= 1e-3)
+    pos_mask = ~uniform_mask
+
+    samples = torch.empty(B, m, device=device, dtype=dtype)
+
+    # uniform case
+    if uniform_mask.any():
+        v = torch.randn(uniform_mask.sum(), m, device=device, dtype=dtype)
+        v = v / (v.norm(dim=-1, keepdim=True) + 1e-8)
+        samples[uniform_mask] = v
+
+    if pos_mask.any():
+        mu_pos = mu[pos_mask]
+        kappa_pos = kappa[pos_mask]
+        B_pos = mu_pos.shape[0]
+
+        k2 = 4 * kappa_pos ** 2
+        sqrt_term = torch.sqrt(k2 + m_minus_1**2)
+        b = (-2 * kappa_pos + sqrt_term) / m_minus_1
+        a = (m_minus_1 + 2 * kappa_pos + sqrt_term) / 4.0
+        d = 4 * a * b / (1 + b) - m_minus_1 * torch.log(torch.tensor(m_minus_1, device=device, dtype=dtype))
+
+        Beta_dist = torch.distributions.Beta(
+            torch.tensor(m_minus_1 / 2, device=device, dtype=dtype),
+            torch.tensor(m_minus_1 / 2, device=device, dtype=dtype)
+        )
+
+        omega = torch.empty(B_pos, device=device, dtype=dtype)
+        accepted = torch.zeros(B_pos, dtype=torch.bool, device=device)
+
+        n_iter = 0
+        while not torch.all(accepted):
+            idx = (~accepted).nonzero(as_tuple=False).squeeze(-1)
+            n_rem = idx.numel()
+            eps = Beta_dist.sample((n_rem,)).to(device=device, dtype=dtype)
+
+            b_r, a_r, d_r = b[idx], a[idx], d[idx]
+            num = 1 - (1 + b_r) * eps
+            den = 1 - (1 - b_r) * eps
+            omega_cand = num / den
+
+            t = 2 * a_r * b_r / (1 - (1 - b_r) * eps)
+            u = torch.rand(n_rem, device=device, dtype=dtype)
+            log_accept = m_minus_1 * torch.log(t) - t + d_r - torch.log(u)
+            new_accept = log_accept >= 0
+
+            omega[idx[new_accept]] = omega_cand[new_accept]
+            accepted[idx] = new_accept
+            n_iter += 1
+
+        v = torch.randn(B_pos, int(m_minus_1), device=device, dtype=dtype)
+        v = v / (v.norm(dim=-1, keepdim=True) + 1e-8)
+
+        omega_col = omega.unsqueeze(-1)
+        sqrt_term = torch.sqrt(1 - omega ** 2).unsqueeze(-1)
+        z = torch.cat([omega_col, sqrt_term * v], dim=-1)
+
+        e1 = torch.zeros(1, m, device=device, dtype=dtype)
+        e1[0, 0] = 1.0
+        e1 = e1.expand(B_pos, m)
+
+        u = e1 - mu_pos
+        u = u / (u.norm(dim=-1, keepdim=True) + 1e-8)
+
+        proj = (z * u).sum(dim=-1, keepdim=True)
+        z_reflected = z - 2 * u * proj
+
+        samples[pos_mask] = z_reflected
+    return samples
+
+
 def sample_gaussian(mu, std):
     """
     Sampling from a gaussian

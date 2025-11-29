@@ -53,6 +53,8 @@ def compare_latent_space(true_2d_latent: np.ndarray,
                       svae_losses: dict,
                       nvae_losses: dict,
                       save_path: str = None,
+                      addon_svae: str = '',
+                      addon_nvae: str = '',
                       ) -> NoReturn:
     """
     Function to plot and compare true vs learned latent spaces in 2D.
@@ -77,7 +79,7 @@ def compare_latent_space(true_2d_latent: np.ndarray,
     plt.plot(svae_losses['train'], label='train')
     plt.plot(svae_losses['val'], label='val')
     plt.legend()
-    plt.title('S-VAE training & validation loss')
+    plt.title(f'S-VAE training & validation loss\n{addon_svae}')
     plt.xlabel('epoch')
 
     plt.subplot(2, 3, 4)
@@ -98,7 +100,7 @@ def compare_latent_space(true_2d_latent: np.ndarray,
     plt.plot(nvae_losses['train'], label='train')
     plt.plot(nvae_losses['val'], label='val')
     plt.legend()
-    plt.title('N-VAE training & validation loss')
+    plt.title(f'N-VAE training & validation loss\n{addon_nvae}')
     plt.xlabel('epoch')
 
     plt.tight_layout()

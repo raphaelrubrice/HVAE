@@ -26,7 +26,9 @@ def plot_latent_spaces(svae_latent_tsne,
                        nvae_latent_tsne,
                        nvae_latent_umap,
                        drug_colors=None,
-                       save_path=None):
+                       save_path=None,
+                       addon_svae='',
+                       addon_nvae=''):
     cmap = 'tab20' if drug_colors is not None else None
     plt.figure(figsize=(10, 6))
     plt.subplot(2, 2, 1)
@@ -34,7 +36,7 @@ def plot_latent_spaces(svae_latent_tsne,
                 svae_latent_tsne[:, 1], 
                 c=drug_colors, cmap=cmap, 
                 alpha=0.6, s=10)
-    plt.title('espace latent S-VAE sur tahoe (projection t-sne)')
+    plt.title(f'espace latent S-VAE sur tahoe (projection t-sne)\n{addon_svae}')
     plt.colorbar(label='drug id')
     plt.axis('equal')
 
@@ -43,7 +45,7 @@ def plot_latent_spaces(svae_latent_tsne,
                 svae_latent_umap[:, 1], 
                 c=drug_colors, cmap=cmap, 
                 alpha=0.6, s=10)
-    plt.title('espace latent S-VAE sur tahoe (projection UMAP)')
+    plt.title(f'espace latent S-VAE sur tahoe (projection UMAP)\n{addon_svae}')
     plt.colorbar(label='drug id')
     plt.axis('equal')
 
@@ -52,7 +54,7 @@ def plot_latent_spaces(svae_latent_tsne,
                 nvae_latent_tsne[:, 1], 
                 c=drug_colors, cmap=cmap, 
                 alpha=0.6, s=10)
-    plt.title('espace latent N-VAE sur tahoe (projection t-sne)')
+    plt.title(f'espace latent N-VAE sur tahoe (projection t-sne)\n{addon_nvae}')
     plt.colorbar(label='drug id')
     plt.axis('equal')
 
@@ -61,7 +63,7 @@ def plot_latent_spaces(svae_latent_tsne,
                 nvae_latent_umap[:, 1], 
                 c=drug_colors, cmap=cmap, 
                 alpha=0.6, s=10)
-    plt.title('espace latent N-VAE sur tahoe (projection UMAP)')
+    plt.title(f'espace latent N-VAE sur tahoe (projection UMAP)\n{addon_nvae}')
     plt.colorbar(label='drug id')
     plt.axis('equal')
 
@@ -205,7 +207,7 @@ if __name__ == "__main__":
     val_tahoe_dataset = TensorDataset(val_tahoe_tensor)
     val_tahoe_loader = DataLoader(val_tahoe_dataset, batch_size=16, shuffle=True)
 
-    EPOCHS = 10
+    EPOCHS = 50
     # ===============SVAE pour Tahoe=============
     print("[SVAE] Instantiating SVAE and optimizer..")
     
@@ -216,7 +218,7 @@ if __name__ == "__main__":
     # gradually increase, I saw that in another paper)
     # 8 = multiplier of 2 + close to the maximum surface area of the sphere (d=7)
     latent_dim = 8
-    hidden_dim = 256
+    hidden_dim = 512
     
     model_svae = SVAE(50, hidden_dim, latent_dim)  # dimension latente 10 pour capturer complexité
     optimizer = torch.optim.Adam(model_svae.parameters(), lr=5e-4)
@@ -228,11 +230,17 @@ if __name__ == "__main__":
                                         model_svae,
                                         optimizer,
                                         epochs=EPOCHS,
-                                        beta_kl=1e-4,
-                                        patience=10,
+                                        beta_kl=1,
+                                        patience=15,
                                         show_loss_every=1)
     # analyse espace latent tahoe
     svae_latent_samples, mu_svae, kappas = model_svae.get_latent_samples(tahoe_tensor)
+
+    # Compute marginal LL
+    svae_train_ll = model_svae.total_marginal_ll(tahoe_tensor)
+    svae_val_ll = model_svae.total_marginal_ll(val_tahoe_tensor)
+    addon_svae = f"Train LL: {svae_train_ll:.4f}, Val LL: {svae_val_ll:.4f}"
+    print(f"[SVAE] {addon_svae}")
 
     # projection tsne pour visualisation (dimension 10 -> 2)
     print("[SVAE] TSNE projection..")
@@ -263,10 +271,16 @@ if __name__ == "__main__":
                                         optimizer,
                                         epochs=EPOCHS,
                                         beta_kl=0.1,
-                                        patience=5,
+                                        patience=15,
                                         show_loss_every=1)
     # analyse espace latent tahoe
     nvae_latent_samples, mu_nvae, std = model_nvae.get_latent_samples(tahoe_tensor)
+
+    # Compute marginal LL
+    nvae_train_ll = model_nvae.total_marginal_ll(tahoe_tensor)
+    nvae_val_ll = model_nvae.total_marginal_ll(val_tahoe_tensor)
+    addon_nvae = f"Train LL: {nvae_train_ll:.4f}, Val LL: {nvae_val_ll:.4f}"
+    print(f"[NVAE] {addon_nvae}")
 
     print("[NVAE] Plotting Reconstruction metrics..")
     reconstruction_metrics(model_nvae, "./Plots/NVAE_recon.pdf")
@@ -291,7 +305,9 @@ if __name__ == "__main__":
                        nvae_latent_tsne,
                        nvae_latent_umap,
                        drug_colors, 
-                       "./Plots/compare_SVAE_NVAE_Tahoe.pdf")
+                       "./Plots/compare_SVAE_NVAE_Tahoe.pdf",
+                       addon_svae=addon_svae,
+                       addon_nvae=addon_nvae)
 
     print("Generation uniform sphere prior..")
     generated_samples_svae = generate_from_uniform_sphere(model_svae, n_samples=100, dim=latent_dim)

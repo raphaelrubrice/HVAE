@@ -50,12 +50,12 @@ class EarlyStopping(object):
 def format_loss(val_epoch_parts, beta_kl):
     """
     print the loss components in the form:
-    -recon - beta_kl * kl
+    recon + beta_kl * kl
     while handling signs cleanly (no '--' or '+ -').
     """
     recon = val_epoch_parts["recon"][-1]
     kl_latent = val_epoch_parts["kl"][-1]
-    return f"- {recon:.4f} - {beta_kl} * {kl_latent:.4f}"
+    return f"{recon:.4f} + {beta_kl} * {kl_latent:.4f}"
 
 def training(dataloader: torch.utils.data.DataLoader,
                   val_dataloader:torch.utils.data.DataLoader,
@@ -150,7 +150,7 @@ def training(dataloader: torch.utils.data.DataLoader,
         for key in all_parts["val"].keys():
             all_parts["val"][key].append(np.mean(val_epoch_parts[key]))
         if epoch == 1:
-            print("Loss printing format:\nepoch x: val = loss (-recon - beta_kl * kl) | train = loss (-recon - beta_kl * kl)\n")
+            print("Loss printing format:\nepoch x: val = loss (-recon + beta_kl * kl) | train = loss (-recon + beta_kl * kl)\n")
         if epoch % show_loss_every == 0:
             print(f"epoch {epoch}: val = {losses["val"][-1]:.4f} ({format_loss(val_epoch_parts, beta_kl)}) | train = {losses["train"][-1]:.4f} ({format_loss(epoch_parts, beta_kl)})")
     return model, losses, all_parts
