@@ -27,16 +27,19 @@ if __name__ == "__main__":
     dataloader, data_tensor, data_2d, labels = dataset
     val_dataloader, val_data_tensor, val_data_2d, val_labels = val_dataset
 
+    EPOCHS = 100
+    HIDDEN = 32
+    LR = 0.001
     print("[SVAE] Instantiating SVAE and optimizer..")
-    model_svae = SVAE(input_dim=100, hidden_dim=256, latent_dim=2)
-    optimizer = torch.optim.Adam(model_svae.parameters(), lr=0.001)
+    model_svae = SVAE(input_dim=100, hidden_dim=HIDDEN, latent_dim=2)
+    optimizer = torch.optim.Adam(model_svae.parameters(), lr=LR)
 
     print("[SVAE] Started training..")
     model_svae, svae_losses, all_svae_parts = training(dataloader, 
                                     val_dataloader,
                                     model_svae,
                                     optimizer,
-                                    epochs=50,
+                                    epochs=EPOCHS,
                                     beta_kl=1,
                                     show_loss_every=1)
     
@@ -50,15 +53,15 @@ if __name__ == "__main__":
     print(f"[SVAE] {addon_svae}")
 
     print("\n[NVAE] Instantiating NVAE and optimizer..")
-    model_nvae = GaussianVAE(input_dim=100, hidden_dim=256, latent_dim=2)
-    optimizer = torch.optim.Adam(model_nvae.parameters(), lr=0.001)
+    model_nvae = GaussianVAE(input_dim=100, hidden_dim=HIDDEN, latent_dim=2)
+    optimizer = torch.optim.Adam(model_nvae.parameters(), lr=LR)
 
     print("[NVAE] Started training..")
     model_nvae, nvae_losses, all_nvae_parts = training(dataloader, 
                                     val_dataloader,
                                     model_nvae,
                                     optimizer,
-                                    epochs=50,
+                                    epochs=EPOCHS,
                                     beta_kl=0.1,
                                     show_loss_every=1)
     

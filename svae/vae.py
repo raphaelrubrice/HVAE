@@ -18,6 +18,59 @@ def torch_gamma_func(val):
     """
     return torch.exp(torch.lgamma(torch.tensor(val)))
 
+# class SVAE(nn.Module):
+#     """implémentation du s-vae avec distribution vmf"""
+    
+#     def __init__(self, input_dim, hidden_dim, latent_dim):
+#         super().__init__()
+#         self.latent_dim = latent_dim
+        
+#         # encodeur
+#         self.fc1 = nn.Linear(input_dim, hidden_dim)
+#         self.fc2 = nn.Linear(hidden_dim, hidden_dim // 2)
+#         self.fc_mu = nn.Linear(hidden_dim // 2, latent_dim)
+#         self.fc_kappa = nn.Linear(hidden_dim // 2, 1)
+#         # >> RAPH: I stand corrected, a Gaussian in Rd needs mu and sigma 
+#         # to be in Rd but that's not the case for the vMF: a vMF 
+#         # on Sd-1 (Rd) require mu in Rd but kappa in R ! 
+#         # So you were right :D
+        
+#         # >> RAPH: When kappa grows too high, the probability of acceptance drops
+#         # in Ulrich. Another paper from Nicols de Cao shows the unstability
+#         # see https://arxiv.org/pdf/2006.04437 Fig. 2
+#         # The relation Kappa vs Dim is not log linear but almost
+#         # By looking at it, for dim < 10000 a heuristic could be to cap the maximum
+#         # Kappa to 100 * dim
+#         self.max_kappa = latent_dim * 100
+
+#         # décodeur
+#         self.fc3 = nn.Linear(latent_dim, hidden_dim // 2)
+#         self.fc4 = nn.Linear(hidden_dim // 2, hidden_dim)
+#         self.fc5 = nn.Linear(hidden_dim, input_dim)
+        
+#     def encode(self, x):
+#         h = F.relu(self.fc1(x))
+#         h = F.relu(self.fc2(h))
+        
+#         # mu normalisé sur la sphère
+#         mu = self.fc_mu(h)
+#         mu = mu / (torch.norm(mu, dim=-1, keepdim=True) + 1e-8)
+        
+#         # kappa positif
+#         kappa = F.softplus(self.fc_kappa(h)) +1
+#         # >> RAPH: Why +0.1 ? the authors used +1 => corrected
+        
+#         # >> RAPH: When kappa grows too high, the probability of acceptance drops
+#         # clipping to prevent getting stuck at sampling
+#         # not normalizing because that would completely change the resulting distribution we sample from !!
+#         kappa = torch.clip(kappa, max=self.max_kappa)
+
+#         return mu, kappa
+    
+#     def decode(self, z):
+#         h = F.relu(self.fc3(z))
+#         h = F.relu(self.fc4(h))
+#         return self.fc5(h)
 class SVAE(nn.Module):
     """implémentation du s-vae avec distribution vmf"""
     
@@ -26,10 +79,10 @@ class SVAE(nn.Module):
         self.latent_dim = latent_dim
         
         # encodeur
-        self.fc1 = nn.Linear(input_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim // 2)
-        self.fc_mu = nn.Linear(hidden_dim // 2, latent_dim)
-        self.fc_kappa = nn.Linear(hidden_dim // 2, 1)
+        self.encoder = nn.Linear(input_dim, hidden_dim)
+        
+        self.fc_mu = nn.Linear(hidden_dim, latent_dim)
+        self.fc_kappa = nn.Linear(hidden_dim, 1)
         # >> RAPH: I stand corrected, a Gaussian in Rd needs mu and sigma 
         # to be in Rd but that's not the case for the vMF: a vMF 
         # on Sd-1 (Rd) require mu in Rd but kappa in R ! 
@@ -44,13 +97,12 @@ class SVAE(nn.Module):
         self.max_kappa = latent_dim * 100
 
         # décodeur
-        self.fc3 = nn.Linear(latent_dim, hidden_dim // 2)
-        self.fc4 = nn.Linear(hidden_dim // 2, hidden_dim)
-        self.fc5 = nn.Linear(hidden_dim, input_dim)
+        self.decoder = nn.Sequential(nn.Linear(latent_dim, hidden_dim),
+                                    nn.ReLU(),
+                                    nn.Linear(hidden_dim, input_dim))
         
     def encode(self, x):
-        h = F.relu(self.fc1(x))
-        h = F.relu(self.fc2(h))
+        h = F.relu(self.encoder(x))
         
         # mu normalisé sur la sphère
         mu = self.fc_mu(h)
@@ -68,9 +120,7 @@ class SVAE(nn.Module):
         return mu, kappa
     
     def decode(self, z):
-        h = F.relu(self.fc3(z))
-        h = F.relu(self.fc4(h))
-        return self.fc5(h)
+        return F.relu(self.decoder(z))
     
     def kl_vmf(self, kappa):
         # >> RAPH: One of the main remarks in the calculations 
@@ -158,49 +208,6 @@ class SVAE(nn.Module):
         loss = recon_loss + beta_kl * kl_loss
         return loss, dict(recon=recon_loss.item(),
                           kl=kl_loss.item())
-    
-    def marginal_ll_sample(self, x, N: int = 500):
-        """
-        This implements the Importance Weighted Auto Encoder Estimator (Burda et al., 2016)
-        for one sample.
-        This estimator allows an approximation of the marginal log likelihood for a given sample
-        Because vMF can be unstable, we compute in log space then use the logsumexp trick
-        """
-        self.eval()
-        with torch.no_grad():
-            # x should be one sample
-            mu, kappa = self.encode(x)
-            mu = torch.cat([mu for _ in range(N)])
-            kappa = torch.cat([kappa for _ in range(N)])
-            z = self.sample(mu, kappa)
-            x_z = self.decode(z)
-
-        dim = x.size(1)
-        if dim > 1:
-            normal = torch.distributions.MultivariateNormal(x_z, 
-                                                            torch.diag(torch.tensor([1.0]*dim)))
-        else:
-            normal = torch.distributions.Normal(x_z, 
-                                                torch.tensor([1.0]))
-
-        # posterior input: p(x|z)
-        log_p_x_z = normal.log_prob(x)
-        
-        # prior latent: p(z)
-        # the uniform probability on the sphere of dimension dim-1
-        log_p_z = torch.lgamma(torch.tensor(dim/2.0)) - (dim/2.0)*torch.log(torch.tensor(2*torch.pi))
-
-        # approximate posterior latent: q(z|x)
-        ive = Ive.apply(dim/2 - 1, kappa)
-        # log iv = log ive + kappa
-        log_cm = (dim/2 - 1) * torch.log(kappa + 1e-8) - (dim/2) * torch.log(2 * torch.tensor(torch.pi)) - (torch.log(ive + 1e-8) + kappa)
-        # vMF probability
-        dot = torch.sum((kappa * mu) * z, dim=1)
-        log_q_z_x = log_cm.ravel() + dot
-
-        log_w = log_p_x_z + log_p_z - log_q_z_x
-        approx_log_px = torch.logsumexp(log_w, dim=0).item() - np.log(N)
-        return approx_log_px
     
     def marginal_ll_batch(self, x, N: int = 500):
         """
@@ -312,6 +319,33 @@ class SVAE(nn.Module):
             raise ValueError(f"Unrecognized mode {mode}. Should either be 'sample' or 'dist'.")
     
 
+# class GaussianVAE(nn.Module):
+#     """vae standard avec prior gaussien"""
+    
+#     def __init__(self, input_dim, hidden_dim, latent_dim):
+#         super().__init__()
+        
+#         # encodeur
+#         self.fc1 = nn.Linear(input_dim, hidden_dim)
+#         self.fc2 = nn.Linear(hidden_dim, hidden_dim // 2)
+#         self.fc_mu = nn.Linear(hidden_dim // 2, latent_dim)
+#         self.fc_logvar = nn.Linear(hidden_dim // 2, latent_dim)
+        
+#         # décodeur
+#         self.fc3 = nn.Linear(latent_dim, hidden_dim // 2)
+#         self.fc4 = nn.Linear(hidden_dim // 2, hidden_dim)
+#         self.fc5 = nn.Linear(hidden_dim, input_dim)
+        
+#     def encode(self, x):
+#         h = F.relu(self.fc1(x))
+#         h = F.relu(self.fc2(h))
+#         return self.fc_mu(h), self.fc_logvar(h)
+    
+#     def decode(self, z):
+#         h = F.relu(self.fc3(z))
+#         h = F.relu(self.fc4(h))
+#         return self.fc5(h)
+
 class GaussianVAE(nn.Module):
     """vae standard avec prior gaussien"""
     
@@ -319,29 +353,26 @@ class GaussianVAE(nn.Module):
         super().__init__()
         
         # encodeur
-        self.fc1 = nn.Linear(input_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim // 2)
-        self.fc_mu = nn.Linear(hidden_dim // 2, latent_dim)
-        self.fc_logvar = nn.Linear(hidden_dim // 2, latent_dim)
+        self.encoder = nn.Linear(input_dim, hidden_dim)
+        
+        self.fc_mu = nn.Linear(hidden_dim, latent_dim)
+        self.fc_logvar = nn.Linear(hidden_dim, latent_dim)
         
         # décodeur
-        self.fc3 = nn.Linear(latent_dim, hidden_dim // 2)
-        self.fc4 = nn.Linear(hidden_dim // 2, hidden_dim)
-        self.fc5 = nn.Linear(hidden_dim, input_dim)
+        self.decoder = self.decoder = nn.Sequential(nn.Linear(latent_dim, hidden_dim),
+                                    nn.ReLU(),
+                                    nn.Linear(hidden_dim, input_dim))
         
     def encode(self, x):
-        h = F.relu(self.fc1(x))
-        h = F.relu(self.fc2(h))
+        h = F.relu(self.encoder(x))
         return self.fc_mu(h), self.fc_logvar(h)
+    
+    def decode(self, z):
+        return F.relu(self.decoder(z))
     
     def reparameterize(self, mu, logvar):
         std = torch.exp(0.5 * logvar)
         return sample_gaussian(mu, std)
-    
-    def decode(self, z):
-        h = F.relu(self.fc3(z))
-        h = F.relu(self.fc4(h))
-        return self.fc5(h)
     
     def forward(self, x):
         mu, logvar = self.encode(x)
@@ -361,60 +392,14 @@ class GaussianVAE(nn.Module):
         recon_loss = self.reconstruction_loss(x_recon, x)
         kl_loss = 0.5 * (-1 - logvar + mu.pow(2) + logvar.exp()) 
         # >> RAPH: for each input we compute the formula for log q/p when q and p are gaussians
-        kl_loss = kl_loss.mean()
-        # >> RAPH: we then take the expected value (estimated over the batch)
+        kl_loss = kl_loss.sum(dim=1).mean()
+        # >> RAPH: sum over dimensions, we then take the expected value (estimated over the batch)
         
         # LOSS = - ELBO = - (recon - beta * KL)
         # BUT the MSE is already the (- recon) term when using Gaussian as the input prior
         loss = recon_loss + beta_kl * kl_loss
         return loss, dict(recon=recon_loss.item(),
                           kl=kl_loss.item())
-
-    def marginal_ll_sample(self, x, N: int = 500):
-        """
-        This implements the Importance Weighted Auto Encoder Estimator (Burda et al., 2016)
-        for one sample.
-        This estimator allows an approximation of the marginal log likelihood for a given sample
-        """
-        self.eval()
-        with torch.no_grad():
-            # x should be one sample
-            mu, logvar = self.encode(x)
-            std = torch.exp(0.5 * logvar)
-            mu = torch.cat([mu for _ in range(N)])
-            std = torch.cat([std for _ in range(N)])
-            z = self.sample(mu, std)
-            x_z = self.decode(z)
-
-        dim = x.size(1)
-        if dim > 1:
-            normal = torch.distributions.MultivariateNormal(x_z, 
-                                                            torch.diag(torch.tensor([1.0]*dim)))
-            normal_prior_latent = torch.distributions.MultivariateNormal(torch.tensor([0.0]*dim), 
-                                                                        std)
-            normal_approx_latent = torch.distributions.MultivariateNormal(mu, 
-                                                                        std)
-        else:
-            normal = torch.distributions.Normal(x_z, 
-                                                torch.tensor([1.0]))
-            normal_prior_latent = torch.distributions.MultivariateNormal(torch.tensor([0.0]), 
-                                                                        std)
-            normal_approx_latent = torch.distributions.MultivariateNormal(mu, 
-                                                                            std)
-
-        # posterior input: p(x|z)
-        log_p_x_z = normal.log_prob(x)
-        
-        # prior latent: p(z)
-        log_p_z = normal_prior_latent.log_prob(z)
-
-        # approximate posterior latent: q(z|x)
-        log_q_z_x = normal_approx_latent.log_prob(z)
-
-        log_w = log_p_x_z + log_p_z - log_q_z_x
-
-        approx_px = torch.logsumexp(log_w, dim=0).item() - np.log(N)
-        return approx_px
     
     def marginal_ll_batch(self, x, N: int = 500):
         """
@@ -516,3 +501,160 @@ class GaussianVAE(nn.Module):
             return self.get_latent_distributions(data_tensor)
         else:
             raise ValueError(f"Unrecognized mode {mode}. Should either be 'sample' or 'dist'.")
+
+
+class UnsupervisedClusteringVAE(nn.Module):
+    """
+    Wrapper around GaussianVAE or SVAE that:
+      - trains the inner VAE unsupervised (standard ELBO)
+      - adds a clustering head q(y | z) over K clusters
+      - provides a utility method to compute the unsupervised loss
+
+    The clustering head is intended for:
+      - inducing cluster structure in the latent space
+      - later using q(y | z) as an unsupervised classifier
+
+    This is an M1-style model with an additional clustering regularizer,
+    not the full M2 semi-supervised generative model.
+    """
+
+    def __init__(
+        self,
+        vae_cls,               # GaussianVAE or SVAE class
+        input_dim: int,
+        hidden_dim: int,
+        latent_dim: int,
+        num_clusters: int,
+        beta_kl: float = 1.0,
+    ):
+        """
+        Args
+        ----
+        vae_cls: class
+            Either GaussianVAE or SVAE (or any compatible VAE with full_step).
+        input_dim: int
+            Dimension of the observed data x.
+        hidden_dim: int
+            Hidden dimension for the inner VAE.
+        latent_dim: int
+            Latent dimension of the inner VAE.
+        num_clusters: int
+            Assumed number of clusters K in the latent space.
+        beta_kl: float
+            Weight on the KL term in the inner VAE loss (beta-VAE style).
+        """
+        super().__init__()
+
+        self.num_clusters = num_clusters
+        self.latent_dim = latent_dim
+        self.beta_kl = beta_kl
+
+        # Inner VAE (Gaussian or SVAE)
+        self.vae = vae_cls(input_dim=input_dim,
+                           hidden_dim=hidden_dim,
+                           latent_dim=latent_dim)
+
+        # Simple clustering head: q(y | z)
+        # We use the latent mean as features (mu for Gaussian, mu for SVAE).
+        self.cluster_head = nn.Linear(latent_dim, num_clusters)
+
+    def encode(self, x):
+        """
+        Convenience pass-through to the inner VAE encoder.
+        Returns whatever the inner encoder returns.
+        """
+        return self.vae.encode(x)
+
+    def forward(self, x):
+        """
+        Forward pass through the inner VAE only.
+        (We keep this as a thin wrapper around the base model.)
+        """
+        return self.vae(x)
+
+    def _cluster_logits(self, latent_mean):
+        """
+        Compute logits for q(y | z) from the latent mean.
+        """
+        return self.cluster_head(latent_mean)
+
+    def unsupervised_loss(self, x, entropy_weight: float = 1.0):
+        """
+        Compute unsupervised loss:
+
+            L_total = L_vae(x) + entropy_weight * L_cluster(x)
+
+        where
+            L_vae(x)       = recon + beta_kl * KL   (from inner VAE.full_step)
+            L_cluster(x)   = KL( \bar{q}(y) || Uniform(K) ) - H( q(y|z) )
+
+        - The first term encourages good reconstruction + regularized latent.
+        - The clustering regularizer encourages:
+            * Balanced use of all K clusters (KL to uniform)
+            * Non-degenerate assignments per sample (via negative entropy)
+
+        Returns
+        -------
+        total_loss: torch.Tensor (scalar)
+        logs: dict of scalars for monitoring
+        """
+        # ----- 1. Inner VAE loss (unsupervised ELBO) -----
+        vae_loss, vae_logs = self.vae.full_step(x, beta_kl=self.beta_kl)
+        # vae_loss: scalar, already recon + beta_kl * kl
+
+        # We also need the latent mean to build q(y | z).
+        # GaussianVAE.encode -> (mu, logvar)
+        # SVAE.encode        -> (mu, kappa)
+        with torch.no_grad():
+            enc_out = self.vae.encode(x)
+        latent_mean = enc_out[0]   # first element is mu in both models
+
+        # ----- 2. Clustering head and regularizer -----
+        logits_y = self._cluster_logits(latent_mean)          # (B, K)
+        q_y = F.softmax(logits_y, dim=-1)                     # (B, K)
+
+        # (a) Encourage balanced clusters across the batch:
+        #     KL( \bar{q}(y) || Uniform(K) )
+        batch_mean = q_y.mean(dim=0)                          # (K,)
+        prior = torch.full_like(batch_mean, 1.0 / self.num_clusters)
+        kl_to_uniform = torch.sum(
+            batch_mean * (torch.log(batch_mean + 1e-8) - torch.log(prior + 1e-8))
+        )
+
+        # (b) Encourage confident assignments per sample:
+        #     - H(q(y|z)) = sum q(y|z) log q(y|z) (averaged over batch)
+        entropy = - (q_y * torch.log(q_y + 1e-8)).sum(dim=1).mean()
+
+        # Combined clustering regularizer
+        cluster_reg = kl_to_uniform - entropy
+
+        # ----- 3. Total loss -----
+        total_loss = vae_loss + entropy_weight * cluster_reg
+
+        logs = {
+            "loss_total": total_loss.item(),
+            "loss_vae": vae_loss.item(),
+            "cluster_reg": cluster_reg.item(),
+            "recon": vae_logs.get("recon", None),
+            "kl_latent": vae_logs.get("kl", None),
+            "kl_to_uniform": kl_to_uniform.item(),
+            "entropy_q_y": entropy.item(),
+        }
+
+        return total_loss, logs
+
+    def predict_clusters(self, x, use_mean: bool = True):
+        """
+        Predict cluster assignments for x using q(y | z).
+
+        Returns:
+            hard_assignments: (B,) long tensor of argmax cluster indices
+            probs:            (B, K) soft cluster probabilities
+        """
+        with torch.no_grad():
+            enc_out = self.vae.encode(x)
+            latent_mean = enc_out[0]
+            logits_y = self._cluster_logits(latent_mean)
+            probs = F.softmax(logits_y, dim=-1)
+            hard = probs.argmax(dim=-1)
+        return hard, probs
