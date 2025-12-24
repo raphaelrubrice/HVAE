@@ -27,38 +27,53 @@ if __name__ == "__main__":
     dataloader, data_tensor, data_2d, labels = dataset
     val_dataloader, val_data_tensor, val_data_2d, val_labels = val_dataset
 
+    EPOCHS = 100
+    HIDDEN = 32
+    LR = 0.001
     print("[SVAE] Instantiating SVAE and optimizer..")
-    model_svae = SVAE(input_dim=100, hidden_dim=128, latent_dim=2)
-    optimizer = torch.optim.Adam(model_svae.parameters(), lr=0.001)
+    model_svae = SVAE(input_dim=100, hidden_dim=HIDDEN, latent_dim=2)
+    optimizer = torch.optim.Adam(model_svae.parameters(), lr=LR)
 
     print("[SVAE] Started training..")
     model_svae, svae_losses, all_svae_parts = training(dataloader, 
                                     val_dataloader,
                                     model_svae,
                                     optimizer,
-                                    epochs=50,
-                                    beta_kl=0.1,
+                                    epochs=EPOCHS,
+                                    beta_kl=1,
                                     show_loss_every=1)
     
     # visualisation espace latent SVAE
-    svae_latent_samples, _, _ = model_svae.get_latent_samples(data_tensor)
+    svae_latent_samples, _, _ = model_svae.get_latent_samples(data_tensor) #model_svae.get_latent_distributions(data_tensor) 
+
+    # Compute marginal LL
+    svae_train_ll = model_svae.total_marginal_ll(data_tensor)
+    svae_val_ll = model_svae.total_marginal_ll(val_data_tensor)
+    addon_svae = f"Train LL: {svae_train_ll:.4f}, Val LL: {svae_val_ll:.4f}"
+    print(f"[SVAE] {addon_svae}")
 
     print("\n[NVAE] Instantiating NVAE and optimizer..")
-    model_nvae = GaussianVAE(input_dim=100, hidden_dim=128, latent_dim=2)
-    optimizer = torch.optim.Adam(model_nvae.parameters(), lr=0.001)
+    model_nvae = GaussianVAE(input_dim=100, hidden_dim=HIDDEN, latent_dim=2)
+    optimizer = torch.optim.Adam(model_nvae.parameters(), lr=LR)
 
     print("[NVAE] Started training..")
     model_nvae, nvae_losses, all_nvae_parts = training(dataloader, 
                                     val_dataloader,
                                     model_nvae,
                                     optimizer,
-                                    epochs=50,
+                                    epochs=EPOCHS,
                                     beta_kl=0.1,
                                     show_loss_every=1)
     
     # visualisation espace latent NVAE
-    nvae_latent_samples, _, _ = model_nvae.get_latent_samples(data_tensor)
+    nvae_latent_samples, _, _ = model_nvae.get_latent_samples(data_tensor) #model_nvae.get_latent_distributions(data_tensor)
     
+    # Compute marginal LL
+    nvae_train_ll = model_nvae.total_marginal_ll(data_tensor)
+    nvae_val_ll = model_nvae.total_marginal_ll(val_data_tensor)
+    addon_nvae = f"Train LL: {nvae_train_ll:.4f}, Val LL: {nvae_val_ll:.4f}"
+    print(f"[NVAE] {addon_nvae}")
+
     print("Plotting latent spaces..")
     compare_latent_space(data_2d, 
                          svae_latent_samples, 
@@ -66,4 +81,6 @@ if __name__ == "__main__":
                          labels, 
                          svae_losses,
                          nvae_losses, 
-                         save_path="Plots/Compare_circle_SVAE_NVAE.pdf")
+                         save_path="Plots/Compare_circle_SVAE_NVAE.pdf",
+                         addon_svae=addon_svae,
+                         addon_nvae=addon_nvae)
