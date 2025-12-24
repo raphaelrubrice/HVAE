@@ -97,7 +97,7 @@ def make_cv_loaders_MNIST(cv=5, batch_size=100, force=False, **kwargs):
             cv_list, test_loader = dico["cv"], dico["test"]
     return cv_list, test_loader
 
-def make_splits_loaders_MNIST(val_size=10000, batch_size=100, force=False, **kwargs):
+def make_splits_loaders_MNIST(val_size=10000, batch_size=100, test_batch_size=100, force=False, **kwargs):
     """
     Loads the dynamically binarized MNIST trainset, applies
     a stratified split on it to form a train_loader/val_loader
@@ -127,7 +127,9 @@ def make_splits_loaders_MNIST(val_size=10000, batch_size=100, force=False, **kwa
                             shuffle=True,
                             **kwargs)
 
-        test_loader  = load_binarized_mnist_torch("test", batch_size=batch_size, shuffle=False)
+        test_loader  = load_binarized_mnist_torch("test", 
+                                                batch_size=test_batch_size, 
+                                                shuffle=False)
 
         # save for future use
         path = PARENTFOLDER / "splitted_MNIST.pkl"
