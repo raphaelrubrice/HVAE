@@ -74,6 +74,7 @@ def training(dataloader: torch.utils.data.DataLoader,
                   optimizer: torch.optim.Optimizer, 
                   epochs: int = 50,
                   beta_kl : float = 1,
+                  warmup=None,
                   scheduler: torch.optim.lr_scheduler.LRScheduler = None,
                   patience: int | None = 10,
                   show_loss_every: int = 10):
@@ -84,9 +85,13 @@ def training(dataloader: torch.utils.data.DataLoader,
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
 
+    if warmup is not None:
+        beta_arr = np.linspace(0, beta_kl, warmup)
+    else:
+        beta_arr = None
+        
     # instantiate early stopper
     early_stopper = EarlyStopping(patience) if patience is not None else None
-    
 
     losses = {"train":[], "val":[]}
     all_parts = {"train":{"recon":[],
@@ -103,6 +108,8 @@ def training(dataloader: torch.utils.data.DataLoader,
             x = batch[0].to(device, non_blocking=True)
             optimizer.zero_grad()
 
+            if beta_arr is not None:
+                beta_kl = beta_arr[epoch-1]
             loss, parts = model.full_step(x, 
                                         beta_kl=beta_kl)
             
@@ -178,6 +185,7 @@ def training_M1(dataloader: torch.utils.data.DataLoader,
                   optimizer: torch.optim.Optimizer, 
                   epochs: int = 50,
                   beta_kl : float = 1,
+                  warmup=None,
                   scheduler: torch.optim.lr_scheduler.LRScheduler = None,
                   patience: int | None = 10,
                   show_loss_every: int = 10,
@@ -185,10 +193,15 @@ def training_M1(dataloader: torch.utils.data.DataLoader,
     """
     Training protocol for our VAE models.
     """
+    assert isinstance(model, M1), f"Unsupported model class: Only supports {M1} but got {model.__class__}"
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
-    
-    assert isinstance(model, M1), f"Unsupported model class: Only supports {M1} but got {model.__class__}"
+
+    if warmup is not None:
+        bata_arr = np.linspace(0, beta_kl, warmup)
+    else:
+        beta_arr = None
+
     # instantiate early stopper
     early_stopper = EarlyStopping(patience) if patience is not None else None
 
@@ -207,6 +220,8 @@ def training_M1(dataloader: torch.utils.data.DataLoader,
             x = batch[0].to(device, non_blocking=True)
             optimizer.zero_grad()
 
+            if beta_arr is not None:
+                beta_kl = beta_arr[epoch-1]
             loss, parts = model.full_step(x, 
                                         beta_kl=beta_kl)
             
@@ -298,10 +313,15 @@ def training_M1M2(dataloader: torch.utils.data.DataLoader,
     """
     Training protocol for our VAE models.
     """
+    assert isinstance(model, M1_M2), f"Unsupported model class: Only supports {M1_M2} but got {model.__class__}"
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     
-    assert isinstance(model, M1_M2), f"Unsupported model class: Only supports {M1_M2} but got {model.__class__}"
+    if warmup is not None:
+        beta_arr = np.linspace(0, beta_kl, warmup)
+    else:
+        beta_arr = None
+
     # instantiate early stopper
     early_stopper = EarlyStopping(patience) if patience is not None else None
 
@@ -319,6 +339,9 @@ def training_M1M2(dataloader: torch.utils.data.DataLoader,
         for batch in dataloader:
             x = batch[0].to(device, non_blocking=True)
             optimizer.zero_grad()
+
+            if beta_arr is not None:
+                beta_kl = beta_arr[epoch-1]
 
             loss, parts = model.full_step(x, 
                                         beta_kl=beta_kl,
