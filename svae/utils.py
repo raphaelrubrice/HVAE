@@ -11,48 +11,57 @@ import sys
 # =========================
 class Iv(torch.autograd.Function):
     """
-    Computes a differentiable scaled bessel function.
+    Differentiable modified Bessel function I_v(x) via SciPy (CPU).
     """
     @staticmethod
     def forward(ctx, order, value):
-        ctx.save_for_backward(value)
         ctx.order = order
-        iv_val = iv(order, value.detach().cpu().numpy())
-        return torch.from_numpy(iv_val).to(device=value.device, dtype=value.dtype)
-    
+        ctx.save_for_backward(value)
+
+        x_np = value.detach().cpu().numpy()
+        y_np = iv(order, x_np)
+
+        return torch.from_numpy(y_np).to(device=value.device, dtype=value.dtype)
+
     @staticmethod
     def backward(ctx, grad_output):
-        value = ctx.saved_tensors[0]
+        (value,) = ctx.saved_tensors
         order = ctx.order
-        # derivative from p.14, equation 16:
-        # d/dx iv(order, value) = 1/2 * (iv(order - 1, value) + ive(order + 1, value))
-        di_dval = 0.5 * (iv(order - 1, value) + iv(order + 1, value))
-        di_dval = torch.from_numpy(di_dval).to(device=value.device, dtype=value.dtype)
-        return None, grad_output * di_dval
+
+        x_np = value.detach().cpu().numpy()
+        # d/dx I_v(x) = 0.5*(I_{v-1}(x) + I_{v+1}(x))
+        di_np = 0.5 * (iv(order - 1, x_np) + iv(order + 1, x_np))
+        di = torch.from_numpy(di_np).to(device=value.device, dtype=value.dtype)
+
+        return None, grad_output * di
+
 
 class Ive(torch.autograd.Function):
     """
-    Computes a differentiable scaled bessel function.
+    Differentiable scaled modified Bessel ive(v, x) = exp(-x) * I_v(x),
+    computed using Iv.apply to reuse its backward.
     """
     @staticmethod
     def forward(ctx, order, value):
-        ctx.save_for_backward(value)
         ctx.order = order
-        iv_val = Iv(value)
+        ctx.save_for_backward(value)
+
+        iv_val = Iv.apply(order, value)
         return torch.exp(-value) * iv_val
-    
+
     @staticmethod
     def backward(ctx, grad_output):
-        value = ctx.saved_tensors[0]
+        (value,) = ctx.saved_tensors
         order = ctx.order
-        # ive is simply exp(-k) * Iv
-        # so the derivative is -k*exp(-k)*Iv + exp(-k)dIv (see dIv ine the Iv class)
-        term1 = -value * torch.exp(-value) * Iv(value)
-        d_iv = 0.5 * (Iv(order - 1, value) + Iv(order + 1, value))
-        term2 = torch.exp(-value) * d_iv
-        d_ive = term1 + term2
-        d_ive = torch.from_numpy(d_ive).to(device=value.device, dtype=value.dtype)
-        return None, grad_output * d_ive
+
+        # ive(v,x) = exp(-x) * I_v(x)
+        # d/dx ive = exp(-x) * (dI_v/dx - I_v)
+        iv_val = Iv.apply(order, value)  # Tensor
+        dIv = 0.5 * (Iv.apply(order - 1, value) + Iv.apply(order + 1, value))
+
+        dIve = torch.exp(-value) * (dIv - iv_val)
+
+        return None, grad_output * dIve
 
 
 # class Ive(torch.autograd.Function):
