@@ -198,7 +198,7 @@ def training_M1(dataloader: torch.utils.data.DataLoader,
     model.to(device)
 
     if warmup is not None:
-        bata_arr = np.linspace(0, beta_kl, warmup)
+        beta_arr = np.linspace(0, beta_kl, warmup)
     else:
         beta_arr = None
 
@@ -306,6 +306,7 @@ def training_M1M2(dataloader: torch.utils.data.DataLoader,
                   optimizer: torch.optim.Optimizer, 
                   epochs: int = 50,
                   beta_kl : float = 1,
+                  warmup=None,
                   alpha: float = 0.1,
                   scheduler: torch.optim.lr_scheduler.LRScheduler = None,
                   patience: int | None = 10,
