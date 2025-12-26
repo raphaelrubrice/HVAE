@@ -68,6 +68,17 @@ def format_loss_M1M2(val_epoch_parts):
     M2 = val_epoch_parts["M2"][-1]
     return f"{M1:.4f} + {M2:.4f}"
 
+def to_item(dico):
+    for key in dico.keys():
+        val = dico[key]
+        try:
+            for i, el in enumerate(val):
+                val[i] = el.item()
+        except:
+            print("Failed, skipping..")
+            pass
+    return dico
+
 def training(dataloader: torch.utils.data.DataLoader,
                   val_dataloader:torch.utils.data.DataLoader,
                   model: torch.nn.Module, 
@@ -124,6 +135,8 @@ def training(dataloader: torch.utils.data.DataLoader,
             
         # register average epoch loss
         epoch_loss = epoch_loss.item() / len(dataloader)
+        # from tensor to float
+        epoch_parts = to_item(epoch_parts)
         # register average of epoch parts
         for key in epoch_parts.keys():
             epoch_parts[key].append(np.mean(epoch_parts[key]))
@@ -145,6 +158,8 @@ def training(dataloader: torch.utils.data.DataLoader,
                 
             # register average epoch loss
             val_epoch_loss = val_epoch_loss.item() / len(val_dataloader)
+            # from tensor to float
+            val_epoch_parts = to_item(val_epoch_parts)
             # register average of epoch parts
             for key in val_epoch_parts.keys():
                 val_epoch_parts[key].append(np.mean(val_epoch_parts[key]))
@@ -235,6 +250,8 @@ def training_M1(dataloader: torch.utils.data.DataLoader,
             
         # register average epoch loss
         epoch_loss = epoch_loss.item() / len(dataloader)
+        # from tensor to float
+        epoch_parts = to_item(epoch_parts)
         # register average of epoch parts
         for key in epoch_parts.keys():
             epoch_parts[key].append(np.mean(epoch_parts[key]))
@@ -256,6 +273,8 @@ def training_M1(dataloader: torch.utils.data.DataLoader,
                 
             # register average epoch loss
             val_epoch_loss = val_epoch_loss.item() / len(val_dataloader)
+            # from tensor to float
+            val_epoch_parts = to_item(val_epoch_parts)
             # register average of epoch parts
             for key in val_epoch_parts.keys():
                 val_epoch_parts[key].append(np.mean(val_epoch_parts[key]))
@@ -357,6 +376,8 @@ def training_M1M2(dataloader: torch.utils.data.DataLoader,
             
         # register average epoch loss
         epoch_loss = epoch_loss.item() / len(dataloader)
+        # from tensor to float
+        epoch_parts = to_item(epoch_parts)
         # register average of epoch parts
         for key in epoch_parts.keys():
             epoch_parts[key].append(np.mean(epoch_parts[key]))
@@ -379,6 +400,8 @@ def training_M1M2(dataloader: torch.utils.data.DataLoader,
                 
             # register average epoch loss
             val_epoch_loss = val_epoch_loss.item() / len(val_dataloader)
+            # from tensor to float
+            val_epoch_parts = to_item(val_epoch_parts)
             # register average of epoch parts
             for key in val_epoch_parts.keys():
                 val_epoch_parts[key].append(np.mean(val_epoch_parts[key]))

@@ -188,10 +188,10 @@ class SVAE(nn.Module):
         # BUT the MSE is already the (- recon) term when using Gaussian as the input prior
         loss = recon_loss + beta_kl * kl_loss
         if return_latent:
-            return loss, dict(recon=recon_loss.item(),
-                            kl=kl_loss.item()), latent
-        return loss, dict(recon=recon_loss.item(),
-                          kl=kl_loss.item())
+            return loss, dict(recon=recon_loss.detach(),
+                            kl=kl_loss.detach()), latent
+        return loss, dict(recon=recon_loss.detach(),
+                          kl=kl_loss.detach())
     
     def marginal_ll_batch(self, x, N: int = 500):
         """
@@ -390,10 +390,10 @@ class GaussianVAE(nn.Module):
         # BUT the MSE is already the (- recon) term when using Gaussian as the input prior
         loss = recon_loss + beta_kl * kl_loss
         if return_latent:
-            return loss, dict(recon=recon_loss.item(),
-                            kl=kl_loss.item()), latent
-        return loss, dict(recon=recon_loss.item(),
-                          kl=kl_loss.item())
+            return loss, dict(recon=recon_loss.detach(),
+                            kl=kl_loss.detach()), latent
+        return loss, dict(recon=recon_loss.detach(),
+                          kl=kl_loss.detach())
     
     def marginal_ll_batch(self, x, N: int = 500):
         """
@@ -679,9 +679,9 @@ class SVAE_M2(nn.Module):
 
         # LOSS = - ELBO = - (recon - beta * KL - alpha * N * KL_y) voir Kingma 2014 SemiSupervised
         loss = recon_loss + beta_kl * kl_loss + alpha * N * y_loss
-        return loss, dict(recon=recon_loss.item(),
-                          kl=kl_loss.item(),
-                          y_loss=y_loss.item())
+        return loss, dict(recon=recon_loss.detach(),
+                          kl=kl_loss.detach(),
+                          y_loss=y_loss.detach())
 
     def sample(self, mu, kappa):
         return batch_sample_vmf(mu, kappa, mu.size(0))
@@ -821,9 +821,9 @@ class GaussianVAE_M2(nn.Module):
 
         # LOSS = - ELBO = - (recon - beta * KL + alpha * N * KL_y) voir Kingma 2014 SemiSupervised
         loss = recon_loss + beta_kl * kl_loss - alpha * N * y_loss
-        return loss, dict(recon=recon_loss.item(),
-                          kl=kl_loss.item(),
-                          y_loss=y_loss.item())
+        return loss, dict(recon=recon_loss.detach(),
+                          kl=kl_loss.detach(),
+                          y_loss=y_loss.detach())
     
     def sample(self, mu, std):
         return sample_gaussian(mu, std)
@@ -1124,8 +1124,8 @@ class M1_M2:
         M2_loss, M2_dict = self.vae_m2.full_step(z1, beta_kl, alpha)
 
         loss = M1_loss + M2_loss
-        return loss, dict(M1=M1_loss.item(),
-                          M2=M2_loss.item())
+        return loss, dict(M1=M1_loss.detach(),
+                          M2=M2_loss.detach())
     
     def predict_class(self, data_tensor, mode, return_latent=False):
         latent_M1, _, _ = self.vae_m1.get_latent(data_tensor, mode, verbose=False)
