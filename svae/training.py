@@ -56,9 +56,9 @@ def format_loss(val_epoch_parts, beta_kl):
     """
     recon = val_epoch_parts["recon"][-1]
     kl_latent = val_epoch_parts["kl"][-1]
-    return f"{recon:.4f} + {beta_kl} * {kl_latent:.4f}"
+    return f"{recon:.4f} + {beta_kl:.2f} * {kl_latent:.4f}"
 
-def format_loss_M1M2(val_epoch_parts, beta_kl):
+def format_loss_M1M2(val_epoch_parts):
     """
     print the loss components in the form:
     recon + beta_kl * kl
@@ -82,8 +82,7 @@ def training(dataloader: torch.utils.data.DataLoader,
     Training protocol for our VAE models.
     """
     assert np.sum([isinstance(model, CLS) for CLS in SUPPORTED_CLASSES]) != 0, f"Unsupported model class: Only supports {SUPPORTED_CLASSES} but got {model.__class__}"
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
+    device = model.device
 
     if warmup is not None:
         beta_arr = np.linspace(0, beta_kl, warmup)
@@ -119,12 +118,12 @@ def training(dataloader: torch.utils.data.DataLoader,
 
             if scheduler is not None:
                 scheduler.step()
-            epoch_loss += loss.item()
+            epoch_loss = epoch_loss + loss
             for key in epoch_parts.keys():
                 epoch_parts[key].append(parts[key])
             
         # register average epoch loss
-        epoch_loss = epoch_loss / len(dataloader)
+        epoch_loss = epoch_loss.item() / len(dataloader)
         # register average of epoch parts
         for key in epoch_parts.keys():
             epoch_parts[key].append(np.mean(epoch_parts[key]))
@@ -140,12 +139,12 @@ def training(dataloader: torch.utils.data.DataLoader,
                 x = batch[0].to(device, non_blocking=True)
                 loss, parts = model.full_step(x, 
                                             beta_kl=beta_kl)
-                val_epoch_loss += loss.item()
+                val_epoch_loss = val_epoch_loss + loss
                 for key in val_epoch_parts.keys():
                     val_epoch_parts[key].append(parts[key])
                 
             # register average epoch loss
-            val_epoch_loss = val_epoch_loss / len(val_dataloader)
+            val_epoch_loss = val_epoch_loss.item() / len(val_dataloader)
             # register average of epoch parts
             for key in val_epoch_parts.keys():
                 val_epoch_parts[key].append(np.mean(val_epoch_parts[key]))
@@ -194,8 +193,7 @@ def training_M1(dataloader: torch.utils.data.DataLoader,
     Training protocol for our VAE models.
     """
     assert isinstance(model, M1), f"Unsupported model class: Only supports {M1} but got {model.__class__}"
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
+    device = model.device
 
     if warmup is not None:
         beta_arr = np.linspace(0, beta_kl, warmup)
@@ -231,12 +229,12 @@ def training_M1(dataloader: torch.utils.data.DataLoader,
 
             if scheduler is not None:
                 scheduler.step()
-            epoch_loss += loss.item()
+            epoch_loss = epoch_loss + loss
             for key in epoch_parts.keys():
                 epoch_parts[key].append(parts[key])
             
         # register average epoch loss
-        epoch_loss = epoch_loss / len(dataloader)
+        epoch_loss = epoch_loss.item() / len(dataloader)
         # register average of epoch parts
         for key in epoch_parts.keys():
             epoch_parts[key].append(np.mean(epoch_parts[key]))
@@ -252,12 +250,12 @@ def training_M1(dataloader: torch.utils.data.DataLoader,
                 x = batch[0].to(device, non_blocking=True)
                 loss, parts = model.full_step(x, 
                                             beta_kl=beta_kl)
-                val_epoch_loss += loss.item()
+                val_epoch_loss = val_epoch_loss + loss.item()
                 for key in val_epoch_parts.keys():
                     val_epoch_parts[key].append(parts[key])
                 
             # register average epoch loss
-            val_epoch_loss = val_epoch_loss / len(val_dataloader)
+            val_epoch_loss = val_epoch_loss.item() / len(val_dataloader)
             # register average of epoch parts
             for key in val_epoch_parts.keys():
                 val_epoch_parts[key].append(np.mean(val_epoch_parts[key]))
@@ -315,8 +313,7 @@ def training_M1M2(dataloader: torch.utils.data.DataLoader,
     Training protocol for our VAE models.
     """
     assert isinstance(model, M1_M2), f"Unsupported model class: Only supports {M1_M2} but got {model.__class__}"
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
+    device = model.device
     
     if warmup is not None:
         beta_arr = np.linspace(0, beta_kl, warmup)
@@ -354,12 +351,12 @@ def training_M1M2(dataloader: torch.utils.data.DataLoader,
 
             if scheduler is not None:
                 scheduler.step()
-            epoch_loss += loss.item()
+            epoch_loss = epoch_loss + loss
             for key in epoch_parts.keys():
                 epoch_parts[key].append(parts[key])
             
         # register average epoch loss
-        epoch_loss = epoch_loss / len(dataloader)
+        epoch_loss = epoch_loss.item() / len(dataloader)
         # register average of epoch parts
         for key in epoch_parts.keys():
             epoch_parts[key].append(np.mean(epoch_parts[key]))
@@ -376,12 +373,12 @@ def training_M1M2(dataloader: torch.utils.data.DataLoader,
                 loss, parts = model.full_step(x, 
                                             beta_kl=beta_kl,
                                             alpha=alpha)
-                val_epoch_loss += loss.item()
+                val_epoch_loss = val_epoch_loss + loss
                 for key in val_epoch_parts.keys():
                     val_epoch_parts[key].append(parts[key])
                 
             # register average epoch loss
-            val_epoch_loss = val_epoch_loss / len(val_dataloader)
+            val_epoch_loss = val_epoch_loss.item() / len(val_dataloader)
             # register average of epoch parts
             for key in val_epoch_parts.keys():
                 val_epoch_parts[key].append(np.mean(val_epoch_parts[key]))
@@ -411,6 +408,6 @@ def training_M1M2(dataloader: torch.utils.data.DataLoader,
         if epoch == 1:
             print("Loss printing format:\nepoch x: val = M1 loss + M2 loss | train = M1 loss + M2 loss\n")
         if epoch % show_loss_every == 0:
-            print(f"epoch {epoch}: val = {losses["val"][-1]:.4f} ({format_loss_M1M2(val_epoch_parts, beta_kl)}) | train = {losses["train"][-1]:.4f} ({format_loss_M1M2(epoch_parts, beta_kl)})")
+            print(f"epoch {epoch}: val = {losses["val"][-1]:.4f} ({format_loss_M1M2(val_epoch_parts)}) | train = {losses["train"][-1]:.4f} ({format_loss_M1M2(epoch_parts)})")
     model.load_state_dict(early_stopper.best_state)
     return model, losses, all_parts

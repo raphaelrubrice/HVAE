@@ -75,6 +75,10 @@ class SVAE(nn.Module):
         xavier_uniform_initialization(self.kappa_encoder)
         xavier_uniform_initialization(self.decoder)
 
+    @property
+    def device(self):
+        return next(self.parameters()).device
+
     def encode(self, x):
         h = self.encoder(x)
         # mu normalisé sur la sphère
@@ -340,7 +344,11 @@ class GaussianVAE(nn.Module):
         xavier_uniform_initialization(self.mu_encoder)
         xavier_uniform_initialization(self.logvar_encoder)
         xavier_uniform_initialization(self.decoder)
-        
+
+    @property
+    def device(self):
+        return next(self.parameters()).device
+    
     def encode(self, x):
         h = self.encoder(x)
         return self.mu_encoder(h), self.logvar_encoder(h)
@@ -557,6 +565,10 @@ class SVAE_M2(nn.Module):
         xavier_uniform_initialization(self.kappa_encoder)
         xavier_uniform_initialization(self.decoder)
 
+    @property
+    def device(self):
+        return next(self.parameters()).device
+
     def encode(self, x):
         logits = self.cluster_block(x)
         
@@ -765,7 +777,11 @@ class GaussianVAE_M2(nn.Module):
         xavier_uniform_initialization(self.mu_encoder)
         xavier_uniform_initialization(self.logvar_encoder)
         xavier_uniform_initialization(self.decoder)
-        
+    
+    @property
+    def device(self):
+        return next(self.parameters()).device
+    
     def encode(self, x):
         h = self.encoder(x)
         logits = self.cluster_block(x)
@@ -905,7 +921,10 @@ class M1:
         
         self.clf = KNeighborsClassifier(**kwargs)
         self._clf_is_fitted = False
-
+    
+    def to(self, device):
+        self.vae.to(device)
+        
     def __getattr__(self, name):
         try:
             return getattr(self.vae, name)
@@ -963,6 +982,10 @@ class M1_M2:
                            latent_dim=latent_dim2,
                            n_clusters=n_clusters,
                            one_layer=one_layer)
+
+    def to(self, device):
+        self.vae_m1.to(device)
+        self.vae_m2.to(device)
 
     def __getattr__(self, name):
         try:
@@ -1056,7 +1079,6 @@ class M1_M2:
                         missing_all += [f"vae_m2.{k}" for k in getattr(out2, "missing_keys", [])]
                         unexpected_all += [f"vae_m2.{k}" for k in getattr(out2, "unexpected_keys", [])]
 
-                    # meta is ignored for strictness; you can validate it if you want
                     return missing_all, unexpected_all
 
                 return _load_state_dict
@@ -1139,159 +1161,3 @@ def predict_classes_loader(model, loader, mode, return_latent=False):
         Z2 = np.concat(Z2)
         return Y, Y_hat, Z1, Z2
     return Y, Y_hat
-
-class UnsupervisedClusteringVAE(nn.Module):
-    """
-    Wrapper around GaussianVAE or SVAE that:
-      - trains the inner VAE unsupervised (standard ELBO)
-      - adds a clustering head q(y | z) over K clusters
-      - provides a utility method to compute the unsupervised loss
-
-    The clustering head is intended for:
-      - inducing cluster structure in the latent space
-      - later using q(y | z) as an unsupervised classifier
-
-    This is an M1-style model with an additional clustering regularizer,
-    not the full M2 semi-supervised generative model.
-    """
-
-    def __init__(
-        self,
-        vae_cls,               # GaussianVAE or SVAE class
-        input_dim: int,
-        hidden_dim: int,
-        latent_dim: int,
-        num_clusters: int,
-        beta_kl: float = 1.0,
-    ):
-        """
-        Args
-        ----
-        vae_cls: class
-            Either GaussianVAE or SVAE (or any compatible VAE with full_step).
-        input_dim: int
-            Dimension of the observed data x.
-        hidden_dim: int
-            Hidden dimension for the inner VAE.
-        latent_dim: int
-            Latent dimension of the inner VAE.
-        num_clusters: int
-            Assumed number of clusters K in the latent space.
-        beta_kl: float
-            Weight on the KL term in the inner VAE loss (beta-VAE style).
-        """
-        super().__init__()
-
-        self.num_clusters = num_clusters
-        self.latent_dim = latent_dim
-        self.beta_kl = beta_kl
-
-        # Inner VAE (Gaussian or SVAE)
-        self.vae = vae_cls(input_dim=input_dim,
-                           hidden_dim=hidden_dim,
-                           latent_dim=latent_dim)
-
-        # Simple clustering head: q(y | z)
-        # We use the latent mean as features (mu for Gaussian, mu for SVAE).
-        self.cluster_head = nn.Linear(latent_dim, num_clusters)
-
-    def encode(self, x):
-        """
-        Convenience pass-through to the inner VAE encoder.
-        Returns whatever the inner encoder returns.
-        """
-        return self.vae.encode(x)
-
-    def forward(self, x):
-        """
-        Forward pass through the inner VAE only.
-        (We keep this as a thin wrapper around the base model.)
-        """
-        return self.vae(x)
-
-    def _cluster_logits(self, latent_mean):
-        """
-        Compute logits for q(y | z) from the latent mean.
-        """
-        return self.cluster_head(latent_mean)
-
-    def unsupervised_loss(self, x, entropy_weight: float = 1.0):
-        """
-        Compute unsupervised loss:
-
-            L_total = L_vae(x) + entropy_weight * L_cluster(x)
-
-        where
-            L_vae(x)       = recon + beta_kl * KL   (from inner VAE.full_step)
-            L_cluster(x)   = KL( \bar{q}(y) || Uniform(K) ) - H( q(y|z) )
-
-        - The first term encourages good reconstruction + regularized latent.
-        - The clustering regularizer encourages:
-            * Balanced use of all K clusters (KL to uniform)
-            * Non-degenerate assignments per sample (via negative entropy)
-
-        Returns
-        -------
-        total_loss: torch.Tensor (scalar)
-        logs: dict of scalars for monitoring
-        """
-        # ----- 1. Inner VAE loss (unsupervised ELBO) -----
-        vae_loss, vae_logs = self.vae.full_step(x, beta_kl=self.beta_kl)
-        # vae_loss: scalar, already recon + beta_kl * kl
-
-        # We also need the latent mean to build q(y | z).
-        # GaussianVAE.encode -> (mu, logvar)
-        # SVAE.encode        -> (mu, kappa)
-        with torch.no_grad():
-            enc_out = self.vae.encode(x)
-        latent_mean = enc_out[0]   # first element is mu in both models
-
-        # ----- 2. Clustering head and regularizer -----
-        logits_y = self._cluster_logits(latent_mean)          # (B, K)
-        q_y = F.softmax(logits_y, dim=-1)                     # (B, K)
-
-        # (a) Encourage balanced clusters across the batch:
-        #     KL( \bar{q}(y) || Uniform(K) )
-        batch_mean = q_y.mean(dim=0)                          # (K,)
-        prior = torch.full_like(batch_mean, 1.0 / self.num_clusters)
-        kl_to_uniform = torch.sum(
-            batch_mean * (torch.log(batch_mean + 1e-8) - torch.log(prior + 1e-8))
-        )
-
-        # (b) Encourage confident assignments per sample:
-        #     - H(q(y|z)) = sum q(y|z) log q(y|z) (averaged over batch)
-        entropy = - (q_y * torch.log(q_y + 1e-8)).sum(dim=1).mean()
-
-        # Combined clustering regularizer
-        cluster_reg = kl_to_uniform - entropy
-
-        # ----- 3. Total loss -----
-        total_loss = vae_loss + entropy_weight * cluster_reg
-
-        logs = {
-            "loss_total": total_loss.item(),
-            "loss_vae": vae_loss.item(),
-            "cluster_reg": cluster_reg.item(),
-            "recon": vae_logs.get("recon", None),
-            "kl_latent": vae_logs.get("kl", None),
-            "kl_to_uniform": kl_to_uniform.item(),
-            "entropy_q_y": entropy.item(),
-        }
-
-        return total_loss, logs
-
-    def predict_clusters(self, x, use_mean: bool = True):
-        """
-        Predict cluster assignments for x using q(y | z).
-
-        Returns:
-            hard_assignments: (B,) long tensor of argmax cluster indices
-            probs:            (B, K) soft cluster probabilities
-        """
-        with torch.no_grad():
-            enc_out = self.vae.encode(x)
-            latent_mean = enc_out[0]
-            logits_y = self._cluster_logits(latent_mean)
-            probs = F.softmax(logits_y, dim=-1)
-            hard = probs.argmax(dim=-1)
-        return hard, probs
