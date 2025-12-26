@@ -2,88 +2,89 @@
 import numpy as np
 import torch
 from torch.utils.data import TensorDataset, DataLoader
-from scipy.special import ive, iv
+import scipy.special
+from numbers import Number
 from typing import Tuple, List
 import sys
 
 # =========================
 # computation utils
 # =========================
-class Iv(torch.autograd.Function):
-    """
-    Differentiable modified Bessel function I_v(x) via SciPy (CPU).
-    """
+# The following section was taken from the official implementation
+
+class IveFunction(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, order, value):
-        ctx.order = order
-        ctx.save_for_backward(value)
+    def forward(self, v, z):
 
-        x_np = value.detach().cpu().numpy()
-        y_np = iv(order, x_np)
+        assert isinstance(v, Number), "v must be a scalar"
 
-        return torch.from_numpy(y_np).to(device=value.device, dtype=value.dtype)
+        self.save_for_backward(z)
+        self.v = v
+        z_cpu = z.data.cpu().numpy()
 
-    @staticmethod
-    def backward(ctx, grad_output):
-        (value,) = ctx.saved_tensors
-        order = ctx.order
+        if np.isclose(v, 0):
+            output = scipy.special.i0e(z_cpu, dtype=z_cpu.dtype)
+        elif np.isclose(v, 1):
+            output = scipy.special.i1e(z_cpu, dtype=z_cpu.dtype)
+        else:  #  v > 0
+            output = scipy.special.ive(v, z_cpu, dtype=z_cpu.dtype)
+        #         else:
+        #             print(v, type(v), np.isclose(v, 0))
+        #             raise RuntimeError('v must be >= 0, it is {}'.format(v))
 
-        x_np = value.detach().cpu().numpy()
-        # d/dx I_v(x) = 0.5*(I_{v-1}(x) + I_{v+1}(x))
-        di_np = 0.5 * (iv(order - 1, x_np) + iv(order + 1, x_np))
-        di = torch.from_numpy(di_np).to(device=value.device, dtype=value.dtype)
-
-        return None, grad_output * di
-
-
-class Ive(torch.autograd.Function):
-    """
-    Differentiable scaled modified Bessel ive(v, x) = exp(-x) * I_v(x),
-    computed using Iv.apply to reuse its backward.
-    """
-    @staticmethod
-    def forward(ctx, order, value):
-        ctx.order = order
-        ctx.save_for_backward(value)
-
-        iv_val = Iv.apply(order, value)
-        return torch.exp(-value) * iv_val
+        return torch.Tensor(output).to(z.device)
 
     @staticmethod
-    def backward(ctx, grad_output):
-        (value,) = ctx.saved_tensors
-        order = ctx.order
-
-        # ive(v,x) = exp(-x) * I_v(x)
-        # d/dx ive = exp(-x) * (dI_v/dx - I_v)
-        iv_val = Iv.apply(order, value)  # Tensor
-        dIv = 0.5 * (Iv.apply(order - 1, value) + Iv.apply(order + 1, value))
-
-        dIve = torch.exp(-value) * (dIv - iv_val)
-
-        return None, grad_output * dIve
+    def backward(self, grad_output):
+        z = self.saved_tensors[-1]
+        return (
+            None,
+            grad_output * (ive(self.v - 1, z) - ive(self.v, z) * (self.v + z) / z),
+        )
 
 
-# class Ive(torch.autograd.Function):
-#     """
-#     Computes a differentiable scaled bessel function.
-#     """
-#     @staticmethod
-#     def forward(ctx, order, value):
-#         ctx.save_for_backward(value)
-#         ctx.order = order
-#         ive_val = ive(order, value.detach().cpu().numpy())
-#         return torch.from_numpy(ive_val).to(device=value.device, dtype=value.dtype)
-    
-#     @staticmethod
-#     def backward(ctx, grad_output):
-#         value = ctx.saved_tensors[0]
-#         order = ctx.order
-#         # derivative from p.14, equation 16:
-#         # d/dx ive(order, value) = 1/2 * (ive(order - 1, value) + ive(order + 1, value))
-#         di_dval = 0.5 * (ive(order - 1, value.detach().cpu().numpy()) + ive(order + 1, value.detach().cpu().numpy()))
-#         di_dval = torch.from_numpy(di_dval).to(device=value.device, dtype=value.dtype)
-#         return None, grad_output * di_dval
+class Ive(torch.nn.Module):
+    def __init__(self, v):
+        super(Ive, self).__init__()
+        self.v = v
+
+    def forward(self, z):
+        return ive(self.v, z)
+
+
+ive = IveFunction.apply
+
+
+##########
+# The below provided approximations were provided in the
+# respective source papers, to improve the stability of
+# the Bessel fractions.
+# I_(v/2)(k) / I_(v/2 - 1)(k)
+
+# source: https://arxiv.org/pdf/1606.02008.pdf
+def ive_fraction_approx(v, z):
+    # I_(v/2)(k) / I_(v/2 - 1)(k) >= z / (v-1 + ((v+1)^2 + z^2)^0.5
+    return z / (v - 1 + torch.pow(torch.pow(v + 1, 2) + torch.pow(z, 2), 0.5))
+
+
+# source: https://arxiv.org/pdf/1902.02603.pdf
+def ive_fraction_approx2(v, z, eps=1e-20):
+    def delta_a(a):
+        lamb = v + (a - 1.0) / 2.0
+        return (v - 0.5) + lamb / (
+            2 * torch.sqrt((torch.pow(lamb, 2) + torch.pow(z, 2)).clamp(eps))
+        )
+
+    delta_0 = delta_a(0.0)
+    delta_2 = delta_a(2.0)
+    B_0 = z / (
+        delta_0 + torch.sqrt((torch.pow(delta_0, 2) + torch.pow(z, 2))).clamp(eps)
+    )
+    B_2 = z / (
+        delta_2 + torch.sqrt((torch.pow(delta_2, 2) + torch.pow(z, 2))).clamp(eps)
+    )
+
+    return (B_0 + B_2) / 2.0
 
 # =========================
 # Checking utils
