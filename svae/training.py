@@ -364,12 +364,14 @@ def training_M1M2(dataloader: torch.utils.data.DataLoader,
                        "M2":[]}
         for batch in dataloader:
             x = batch[0].to(device, non_blocking=True)
+            y = batch[1].to(device, non_blocking=True)
+
             optimizer.zero_grad()
 
             if beta_arr is not None and epoch <= warmup:
                 beta_kl = beta_arr[epoch-1]
 
-            loss, parts = model.full_step(x, 
+            loss, parts = model.full_step(x, y,
                                         beta_kl=beta_kl,
                                         alpha=alpha)
             
@@ -400,7 +402,9 @@ def training_M1M2(dataloader: torch.utils.data.DataLoader,
         with torch.no_grad():
             for batch in val_dataloader:
                 x = batch[0].to(device, non_blocking=True)
-                loss, parts = model.full_step(x, 
+                y = batch[1].to(device, non_blocking=True)
+
+                loss, parts = model.full_step(x, y,
                                             beta_kl=beta_kl,
                                             alpha=alpha)
                 val_epoch_loss = val_epoch_loss + loss

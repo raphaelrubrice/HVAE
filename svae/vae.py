@@ -661,10 +661,13 @@ class SVAE_M2(nn.Module):
         # sum over dimensions, mean over batch
         return se.view(se.size(0), -1).sum(dim=1).mean()
     
-    def full_step(self, x, beta_kl, alpha):
+    def full_step(self, x, y, beta_kl, alpha):
         N = x.size(1)
         x_recon, mu, kappa, logits = self.forward(x)
-            
+        
+        # Classification Loss (Cross Entropy)
+        classif_loss = F.cross_entropy(logits, y)
+        
         # reconstruction loss
         recon_loss = self.reconstruction_loss(x_recon, x)
         
@@ -679,20 +682,11 @@ class SVAE_M2(nn.Module):
         # whereas the sum does not.
         kl_loss = self.kl_vmf(kappa).mean()
 
-        # KL Divergence for y (Categorical)
-        q_y = F.softmax(logits, dim=1)      # probabilities
-        log_q_y = F.log_softmax(logits, dim=1) # log probabilities
-
-        log_p_y = -torch.log(torch.tensor(self.n_clusters, dtype=torch.float, device=self.device))
-        
-        # KL = sum [ q(y) * (log q(y) - log p(y)) ]
-        kl_y = torch.sum(q_y * (log_q_y - log_p_y), dim=1).mean()
-
-        # LOSS = - ELBO = - (recon - beta * KL - alpha * N * KL_y) voir Kingma 2014 SemiSupervised
-        loss = recon_loss + beta_kl * kl_loss + alpha * N * kl_y
+        # LOSS = - ELBO + alpha * classif_loss= - (recon - beta * KL) + alpha * classif_loss voir Kingma 2014 SemiSupervised
+        loss = recon_loss + beta_kl * kl_loss + alpha * classif_loss
         return loss, dict(recon=recon_loss.detach(),
                           kl=kl_loss.detach(),
-                          kl_y=kl_y.detach())
+                          classif_loss=classif_loss.detach())
 
     def sample(self, mu, kappa):
         return batch_sample_vmf(mu, kappa, mu.size(0))
@@ -824,27 +818,21 @@ class GaussianVAE_M2(nn.Module):
     def full_step(self, x, beta_kl, alpha):
         N = x.size(1)
         x_recon, mu, logvar, logits = self.forward(x)
-            
+    
+        # Classification Loss (Cross Entropy)
+        classif_loss = F.cross_entropy(logits, y)
+
         recon_loss = self.reconstruction_loss(x_recon, x)
         kl_loss = 0.5 * (-1 - logvar + mu.pow(2) + logvar.exp()) 
         # >> RAPH: for each input we compute the formula for log q/p when q and p are gaussians
         kl_loss = kl_loss.sum(dim=1).mean()
         # >> RAPH: sum over dimensions, we then take the expected value (estimated over the batch)
-        
-        # KL Divergence for y (Categorical)
-        q_y = F.softmax(logits, dim=1)      # probabilities
-        log_q_y = F.log_softmax(logits, dim=1) # log probabilities
 
-        log_p_y = -torch.log(torch.tensor(self.n_clusters, dtype=torch.float, device=self.device))
-        
-        # KL = sum [ q(y) * (log q(y) - log p(y)) ]
-        kl_y = torch.sum(q_y * (log_q_y - log_p_y), dim=1).mean()
-
-        # LOSS = - ELBO = - (recon - beta * KL - alpha * N * KL_y) voir Kingma 2014 SemiSupervised
-        loss = recon_loss + beta_kl * kl_loss + alpha * N * kl_y
+        # LOSS = - ELBO + alpha * classif_loss= - (recon - beta * KL) + alpha * classif_loss voir Kingma 2014 SemiSupervised
+        loss = recon_loss + beta_kl * kl_loss + alpha * classif_loss
         return loss, dict(recon=recon_loss.detach(),
                           kl=kl_loss.detach(),
-                          kl_y=kl_y.detach())
+                          classif_loss=classif_loss.detach())
     
     def sample(self, mu, std):
         return sample_gaussian(mu, std)
@@ -1155,9 +1143,9 @@ class M1_M2:
         z1_recon = self.decode(logits, z2)
         return x_recon, param1_M1, param2_M1, z1_recon, param1_M2, param2_M2, logits
 
-    def full_step(self, x, beta_kl, alpha):
+    def full_step(self, x, y, beta_kl, alpha):
         M1_loss, M1_dict, z1 = self.vae_m1.full_step(x, beta_kl, return_latent=True)
-        M2_loss, M2_dict = self.vae_m2.full_step(z1, beta_kl, alpha)
+        M2_loss, M2_dict = self.vae_m2.full_step(z1, y, beta_kl, alpha)
 
         loss = M1_loss + M2_loss
         return loss, dict(M1=M1_loss.detach(),
