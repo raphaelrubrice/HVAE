@@ -25,7 +25,7 @@ def load_binarized_mnist_tensor(split="train", batch_size=128, device=None):
     ds = tfds.load('mnist', shuffle_files=True, split=split, batch_size=batch_size, as_supervised=True)
     # apply dynamic binarization as in Salakhutdinov & Murray, 2008
     ds = ds.map(binarize)
-    ds_np = tfds.as_numpy(ds)
+    ds_np = list(tfds.as_numpy(ds))
     # ds_np["image"]: shape (N, 28, 28), values {0,1}
     print(len(ds_np))
     x = torch.from_numpy(np.concatenate([itm[0] for itm in ds_np])).float()

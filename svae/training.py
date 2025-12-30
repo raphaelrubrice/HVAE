@@ -285,8 +285,9 @@ def training_M1(dataloader: torch.utils.data.DataLoader,
             print(f"\nEarly stoppage after {epoch} epochs with patience of {patience}.")
             print(f"Fitting KNN classifier..")
             # fit KNN
-            model.fit_clf(torch.cat([batch[0].to(device, non_blocking=True) for batch in dataloader]), 
-                          torch.cat([batch[1].to(device, non_blocking=True) for batch in dataloader]), 
+            X_Y_pairs = [(batch[0].to(device, non_blocking=True),batch[1].to(device, non_blocking=True)) for batch in dataloader]
+            model.fit_clf(torch.cat([pair[0] for pair in X_Y_pairs]), 
+                          torch.cat([pair[1] for pair in X_Y_pairs]), 
                           mode)
             
             final_loss_idx = early_stopper.best_loss_idx
@@ -315,8 +316,9 @@ def training_M1(dataloader: torch.utils.data.DataLoader,
     
     print(f"Fitting KNN classifier..")
     # fit KNN
-    model.fit_clf(torch.cat([batch[0].to(device, non_blocking=True) for batch in dataloader]), 
-                    torch.cat([batch[1].to(device, non_blocking=True) for batch in dataloader]), 
+    X_Y_pairs = [(batch[0].to(device, non_blocking=True),batch[1].to(device, non_blocking=True)) for batch in dataloader]
+    model.fit_clf(torch.cat([pair[0] for pair in X_Y_pairs]), 
+                    torch.cat([pair[1] for pair in X_Y_pairs]), 
                     mode)
     model.load_state_dict(early_stopper.best_state)
     return model, losses, all_parts

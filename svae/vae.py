@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from sklearn.neighbors import KNeighborsClassifier
+from scipy.optimize import linear_sum_assignment
 
 # Custome imports
 from.sampling import batch_sample_vmf, sample_gaussian
@@ -952,26 +953,28 @@ class M1:
             raise AttributeError(f"'{type(self).__name__}' object and its 'vae' attribute have no attribute '{name}'")
         
     def fit_clf(self, data_tensor, label_tensor, mode):
-        _, latent, _ = self.get_latent(data_tensor, mode)
+        _, latent_mu, _ = self.get_latent(data_tensor, mode)
         
         # Ensure mu is on CPU and numpy for sklearn
-        if isinstance(latent, torch.Tensor):
-            latent = latent.detach().cpu().numpy()
-            
-        self.clf.fit(latent, label_tensor.detach().cpu().numpy())
+        if isinstance(latent_mu, torch.Tensor):
+            latent_mu = latent_mu.detach().cpu().numpy()
+        
+        print(latent_mu[:5])
+        print(label_tensor[:5])
+        self.clf.fit(latent_mu, label_tensor.detach().cpu().numpy())
         self._clf_is_fitted = True
         return self
     
     def predict_class(self, data_tensor, mode, return_latent=False):
         assert self._clf_is_fitted, "Classifier not fitted yet."
-        _, latent, _ = self.get_latent(data_tensor, mode, verbose=False)
+        _, latent_mu, _ = self.get_latent(data_tensor, mode, verbose=False)
         
-        if isinstance(latent, torch.Tensor):
-            latent = latent.detach().cpu().numpy()
+        if isinstance(latent_mu, torch.Tensor):
+            latent_mu = latent_mu.detach().cpu().numpy()
 
         if return_latent:
-            return self.clf.predict(latent), latent
-        return self.clf.predict(latent)
+            return self.clf.predict(latent_mu), latent_mu
+        return self.clf.predict(latent_mu)
 
 class M1_M2:
     def __init__(self,
@@ -1171,7 +1174,25 @@ class M1_M2:
         if return_latent:
             return y_hat, z1_input, latent_M2
         return y_hat
+
+
+def cluster_acc(Y_pred, Y_true):
+    """Accuracy after hungarian algorithm"""
+    Y_pred = Y_pred.astype(np.int64)
+    assert Y_pred.size == Y_true.size
+    D = max(Y_pred.max(), Y_true.max()) + 1
+    w = np.zeros((D, D), dtype=np.int64)
     
+    # Build confusion matrix
+    for i in range(Y_pred.size):
+        w[Y_pred[i], Y_true[i]] += 1
+        
+    # Find best assignment (maximize diagonal elements)
+    ind = linear_sum_assignment(w.max() - w)
+    
+    # Sum correct counts
+    return sum([w[i, j] for i, j in zip(*ind)]) * 1.0 / Y_pred.size
+
 def predict_classes_loader(model, loader, mode, return_latent=False):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     Y = []
