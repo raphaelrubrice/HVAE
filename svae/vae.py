@@ -678,14 +678,20 @@ class SVAE_M2(nn.Module):
         # whereas the sum does not.
         kl_loss = self.kl_vmf(kappa).mean()
 
-        y_loss = self.cat_dist.log_prob(torch.argmax(logits, dim=1)) # per sample log prob
-        y_loss = y_loss.mean() # expected value
+        # KL Divergence for y (Categorical)
+        q_y = F.softmax(logits, dim=1)      # probabilities
+        log_q_y = F.log_softmax(logits, dim=1) # log probabilities
+
+        log_p_y = -torch.log(torch.tensor(self.n_clusters, dtype=torch.float, device=self.device))
+        
+        # KL = sum [ q(y) * (log q(y) - log p(y)) ]
+        kl_y = torch.sum(q_y * (log_q_y - log_p_y), dim=1).mean()
 
         # LOSS = - ELBO = - (recon - beta * KL - alpha * N * KL_y) voir Kingma 2014 SemiSupervised
-        loss = recon_loss + beta_kl * kl_loss + alpha * N * y_loss
+        loss = recon_loss + beta_kl * kl_loss + alpha * N * kl_y
         return loss, dict(recon=recon_loss.detach(),
                           kl=kl_loss.detach(),
-                          y_loss=y_loss.detach())
+                          kl_y=kl_y.detach())
 
     def sample(self, mu, kappa):
         return batch_sample_vmf(mu, kappa, mu.size(0))
@@ -824,14 +830,20 @@ class GaussianVAE_M2(nn.Module):
         kl_loss = kl_loss.sum(dim=1).mean()
         # >> RAPH: sum over dimensions, we then take the expected value (estimated over the batch)
         
-        y_loss = self.cat_dist.log_prob(torch.argmax(logits, dim=1)) # per sample log prob
-        y_loss = y_loss.mean() # expected value
+        # KL Divergence for y (Categorical)
+        q_y = F.softmax(logits, dim=1)      # probabilities
+        log_q_y = F.log_softmax(logits, dim=1) # log probabilities
 
-        # LOSS = - ELBO = - (recon - beta * KL + alpha * N * KL_y) voir Kingma 2014 SemiSupervised
-        loss = recon_loss + beta_kl * kl_loss - alpha * N * y_loss
+        log_p_y = -torch.log(torch.tensor(self.n_clusters, dtype=torch.float, device=self.device))
+        
+        # KL = sum [ q(y) * (log q(y) - log p(y)) ]
+        kl_y = torch.sum(q_y * (log_q_y - log_p_y), dim=1).mean()
+
+        # LOSS = - ELBO = - (recon - beta * KL - alpha * N * KL_y) voir Kingma 2014 SemiSupervised
+        loss = recon_loss + beta_kl * kl_loss + alpha * N * kl_y
         return loss, dict(recon=recon_loss.detach(),
                           kl=kl_loss.detach(),
-                          y_loss=y_loss.detach())
+                          kl_y=kl_y.detach())
     
     def sample(self, mu, std):
         return sample_gaussian(mu, std)
@@ -940,14 +952,23 @@ class M1:
             raise AttributeError(f"'{type(self).__name__}' object and its 'vae' attribute have no attribute '{name}'")
         
     def fit_clf(self, data_tensor, label_tensor, mode):
-        latent, _, _ = self.get_latent(data_tensor, mode)
+        _, latent, _ = self.get_latent(data_tensor, mode)
+        
+        # Ensure mu is on CPU and numpy for sklearn
+        if isinstance(latent, torch.Tensor):
+            latent = latent.detach().cpu().numpy()
+            
         self.clf.fit(latent, label_tensor.detach().cpu().numpy())
         self._clf_is_fitted = True
         return self
     
     def predict_class(self, data_tensor, mode, return_latent=False):
-        assert self._clf_is_fitted, f"Classifier not fitted yet. you must call fit_clf beforehand."
-        latent, _, _ = self.get_latent(data_tensor, mode, verbose=False)
+        assert self._clf_is_fitted, "Classifier not fitted yet."
+        _, latent, _ = self.get_latent(data_tensor, mode, verbose=False)
+        
+        if isinstance(latent, torch.Tensor):
+            latent = latent.detach().cpu().numpy()
+
         if return_latent:
             return self.clf.predict(latent), latent
         return self.clf.predict(latent)
@@ -1003,6 +1024,8 @@ class M1_M2:
                 return getattr(self.vae_m1, name)
             elif 'm2' in name:
                 return getattr(self.vae_m2, name)
+            elif name == 'move_cat_dist':
+                return self.vae_m2.move_cat_dist
             elif name == 'parameters':
                 param_gen_m1 = self.vae_m1.parameters()
                 param_gen_m2 = self.vae_m2.parameters()
@@ -1138,11 +1161,16 @@ class M1_M2:
                           M2=M2_loss.detach())
     
     def predict_class(self, data_tensor, mode, return_latent=False):
-        latent_M1, _, _ = self.vae_m1.get_latent(data_tensor, mode, verbose=False)
-        latent_M2, _, _, logits = self.vae_m2.get_latent(torch.from_numpy(latent_M1), mode, verbose=False)
+        _, z1_input, _ = self.vae_m1.get_latent(data_tensor, mode, verbose=False)
+        
+        # M2 inference
+        latent_M2, _, _, logits = self.vae_m2.get_latent(z1_input, mode, verbose=False)
+        
+        y_hat = torch.argmax(logits, dim=1).detach().cpu().numpy()
+
         if return_latent:
-            return torch.argmax(logits, dim=1).detach().cpu().numpy(), latent_M1, latent_M2
-        return torch.argmax(logits, dim=1).detach().cpu().numpy()
+            return y_hat, z1_input, latent_M2
+        return y_hat
     
 def predict_classes_loader(model, loader, mode, return_latent=False):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -1156,7 +1184,7 @@ def predict_classes_loader(model, loader, mode, return_latent=False):
 
     for batch in loader:
         x = batch[0].to(device, non_blocking=True)
-        y = batch[1].to(device, non_blocking=True)
+        y = batch[1].detach().cpu().numpy()
         if return_latent and isinstance(model, M1_M2):
             y_hat, z1, z2 = model.predict_class(x, mode, return_latent)
             Z1.append(z1)
@@ -1167,7 +1195,7 @@ def predict_classes_loader(model, loader, mode, return_latent=False):
         else:
             y_hat = model.predict_class(x, mode, return_latent)
 
-        Y.append(y.detach().cpu().numpy())
+        Y.append(y)
         Y_hat.append(y_hat)
     
     Y = np.concat(Y)
