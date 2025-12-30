@@ -815,7 +815,7 @@ class GaussianVAE_M2(nn.Module):
         # sum over dimensions, mean over batch
         return se.view(se.size(0), -1).sum(dim=1).mean()
     
-    def full_step(self, x, beta_kl, alpha):
+    def full_step(self, x, y, beta_kl, alpha):
         N = x.size(1)
         x_recon, mu, logvar, logits = self.forward(x)
     

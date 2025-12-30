@@ -371,7 +371,7 @@ def training_M1M2(dataloader: torch.utils.data.DataLoader,
             if beta_arr is not None and epoch <= warmup:
                 beta_kl = beta_arr[epoch-1]
 
-            loss, parts = model.full_step(x, y,
+            loss, parts = model.full_step(x, y.long(),
                                         beta_kl=beta_kl,
                                         alpha=alpha)
             
@@ -404,7 +404,7 @@ def training_M1M2(dataloader: torch.utils.data.DataLoader,
                 x = batch[0].to(device, non_blocking=True)
                 y = batch[1].to(device, non_blocking=True)
 
-                loss, parts = model.full_step(x, y,
+                loss, parts = model.full_step(x, y.long(),
                                             beta_kl=beta_kl,
                                             alpha=alpha)
                 val_epoch_loss = val_epoch_loss + loss
