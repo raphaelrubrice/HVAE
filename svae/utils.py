@@ -154,13 +154,14 @@ class ShuffledLoader:
         out = []
         for t in batch:
             if isinstance(t, torch.Tensor) and t.ndim > 0 and t.shape[0] == n:
-                out.append(t.index_select(0, perm))
+                out.append(t.index_select(torch.tensor(0, device=self.device_for_randperm), perm))
             else:
                 out.append(t)
         return out
 
     def __iter__(self) -> Iterator[List[torch.Tensor]]:
-        idx = torch.arange(len(self.batches))
+        idx = torch.arange(len(self.batches), 
+                          device=self.device_for_randperm)
         if self.shuffle_batches:
             perm = torch.randperm(
                 len(self.batches),
