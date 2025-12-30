@@ -569,6 +569,10 @@ class SVAE_M2(nn.Module):
     def device(self):
         return next(self.parameters()).device
 
+    def move_cat_dist(self):
+        print(f"\nMoving Categorical Dist to {self.device}")
+        self.cat_dist = torch.distributions.Categorical(torch.tensor([1/self.n_clusters]*self.n_clusters, device=self.device))
+
     def encode(self, x):
         logits = self.cluster_block(x)
         
@@ -782,6 +786,10 @@ class GaussianVAE_M2(nn.Module):
     def device(self):
         return next(self.parameters()).device
     
+    def move_cat_dist(self):
+        print(f"\nMoving Categorical Dist to {self.device}")
+        self.cat_dist = torch.distributions.Categorical(torch.tensor([1/self.n_clusters]*self.n_clusters, device=self.device))
+
     def encode(self, x):
         h = self.encoder(x)
         logits = self.cluster_block(x)

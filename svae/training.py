@@ -338,6 +338,9 @@ def training_M1M2(dataloader: torch.utils.data.DataLoader,
     assert isinstance(model, M1_M2), f"Unsupported model class: Only supports {M1_M2} but got {model.__class__}"
     device = model.device
     
+    # Ensure cat dist is on the correct device
+    model.move_cat_dist()
+
     if warmup is not None:
         beta_arr = np.linspace(0, beta_kl, warmup)
     else:
