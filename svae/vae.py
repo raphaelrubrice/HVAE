@@ -34,7 +34,7 @@ def mse_loss(x_recon, x):
 
 def bce_loss(x_recon, x):
     """Used for MNIST"""
-    return F.binary_cross_entropy(x_recon, x, reduction='sum') / x.size(0)
+    return F.binary_cross_entropy_with_logits(x_recon, x, reduction='sum') / x.size(0)
 
 class SVAE(nn.Module):
     """implémentation du s-vae avec distribution vmf"""
