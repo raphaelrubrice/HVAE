@@ -588,28 +588,29 @@ class SVAE_M2(nn.Module):
         print(f"\nMoving Categorical Dist to {self.device}")
         self.cat_dist = torch.distributions.Categorical(torch.tensor([1/self.n_clusters]*self.n_clusters, device=self.device))
 
-    def encode(self, x):
+    def encode(self, x, y=None):
         logits = self.cluster_block(x)
         
+        # If y is not provided (unsupervised call), approximate with soft probabilities
+        if y is None:
+            y = F.softmax(logits, dim=1)
+            
         h = self.encoder(x)
         
         # mu normalisé sur la sphère
-        mu = self.mu_encoder(torch.cat([h,logits], dim=1))
+        # Condition on y (one-hot or soft)
+        mu = self.mu_encoder(torch.cat([h, y], dim=1))
         mu = mu / (torch.norm(mu, dim=-1, keepdim=True) + 1e-8)
         
         # kappa positif
         kappa = F.softplus(self.kappa_encoder(h)) + 1
-        # >> RAPH: Why +0.1 ? the authors used +1 => corrected
-        
-        # >> RAPH: When kappa grows too high, the probability of acceptance drops
-        # clipping to prevent getting stuck at sampling
-        # not normalizing because that would completely change the resulting distribution we sample from !!
         kappa = torch.clip(kappa, max=self.max_kappa)
 
         return mu, kappa, logits
     
-    def decode(self, logits, z):
-        return self.decoder(torch.cat([z,logits], dim=1))
+    def decode(self, z, y):
+        # Condition reconstruction on z and y
+        return self.decoder(torch.cat([z, y], dim=1))
     
     def kl_vmf(self, kappa):
         # >> RAPH: One of the main remarks in the calculations 
@@ -644,19 +645,19 @@ class SVAE_M2(nn.Module):
         const = (m/2) * torch.log(torch.tensor(torch.pi)) + torch.log(torch.tensor(2)) - torch.log(torch_gamma_func(m/2))
         return bessel_ratio + log_cm + const # see Eq.14 and Eq. 15 p.13
     
-    def forward(self, x):
-        # B x input_dim
-        mu, kappa, logits = self.encode(x)
-        # B x latent_dim, B x 1
+    def forward(self, x, y=None):
+        # 1. Encode to get parameters
+        mu, kappa, logits = self.encode(x, y)
 
-        # échantillonnage
-        batch_size = x.shape[0]
+        # 2. Sample z
         z = self.sample(mu, kappa)
-        # B x latent_dim
         
-        # reconstruction
-        x_recon = self.decode(logits, z)
-        # B x input_dim
+        # 3. Handle y for decoding
+        # If y was provided, use it. If not, use the soft probabilities from logits.
+        y_used = y if y is not None else F.softmax(logits, dim=1)
+        
+        # 4. Decode
+        x_recon = self.decode(z, y_used)
         
         return x_recon, mu, kappa, logits
 
@@ -664,27 +665,26 @@ class SVAE_M2(nn.Module):
         return self.recon_loss_fn(x_recon, x)
     
     def full_step(self, x, y, beta_kl, alpha):
-        N = x.size(1)
-        x_recon, mu, kappa, logits = self.forward(x)
+        """
+        LABELED STEP
+        y: LongTensor of indices (e.g., [0, 3, 2])
+        """
+        # Convert indices to one-hot floats
+        y_onehot = F.one_hot(y, num_classes=self.n_clusters).float()
         
-        # Classification Loss (Cross Entropy)
+        # Pass ground truth y to forward
+        x_recon, mu, kappa, logits = self.forward(x, y=y_onehot)
+        
+        # Classification Loss (Cross Entropy uses logits + indices)
         classif_loss = F.cross_entropy(logits, y)
         
         # reconstruction loss
         recon_loss = self.reconstruction_loss(x_recon, x)
         
         # kl divergence
-        # >> RAPH: We average the kl loss over the batch (the usual 
-        # sum used in the per term kl of the gaussian comes from an analytical 
-        # formula that requires to sum over dimensions, but the overal KL loss
-        # should be averaged for final loss computation)
-        # Note: Sum and Means are both okay since its fndamentally a sum in both cases
-        # however, a mean allows a KL term that is not dependent on the batch size whereas 
-        # a sum is sensitive to this. Using a mean allows comparison across experiments of losses
-        # whereas the sum does not.
         kl_loss = self.kl_vmf(kappa).mean()
 
-        # LOSS = - ELBO + alpha * classif_loss= - (recon - beta * KL) + alpha * classif_loss voir Kingma 2014 SemiSupervised
+        # LOSS = - ELBO + alpha * classif_loss
         loss = recon_loss + beta_kl * kl_loss + alpha * classif_loss
         return loss, dict(recon=recon_loss.detach(),
                           kl=kl_loss.detach(),
@@ -695,45 +695,42 @@ class SVAE_M2(nn.Module):
         UNLABELED STEP (Marginalization)
         Loss = Sum_y [ q(y|x) * ( -ELBO(x,y) ) ] - H(q(y|x))
         """
-        # 1. Get class probabilities q(y|x)
+        # 1. Get class probabilities q(y|x) from the classifier
         logits = self.cluster_block(x)
         probs = F.softmax(logits, dim=1) # [batch, n_clusters]
         
         total_weighted_elbo_loss = 0
         
-        # 2. Iterate over all possible classes y
+        # KL is constant wrt to y because kappa does not depend on y !
+        kl_val = self.kl_vmf(kappa) # [batch] size
+
+        # 2. Iterate over all possible classes y (Enumeration)
         for y_idx in range(self.n_clusters):
-            # Create a batch of y_idx (one-hot)
+            # Create CONSTANT one-hot vector for this hypothesis
+            # We do NOT want gradients flowing back into y_onehot (it's fixed)
             y_target = torch.full((x.size(0),), y_idx, dtype=torch.long, device=self.device)
             y_onehot = F.one_hot(y_target, num_classes=self.n_clusters).float()
             
-            # Run VAE as if this class was the truth
-            x_recon, mu, kappa, logits = self.forward(x)
+            # Run VAE conditioned on the SPECIFIC y class
+            # x_recon and mu/kappa will be specific to this y assumption
+            mu, kappa, _ = self.encode(x, y=y_onehot)
+            z = self.sample(mu, kappa)
+            x_recon = self.decode(z, y_onehot)
             
             # Calculate losses per item (reduction='none')
-            # Recon
             if self.recon_loss_fn == mse_loss:
                 recon_loss = F.mse_loss(x_recon, x, reduction='none').sum(dim=1)
             else:
                 recon_loss = F.binary_cross_entropy(x_recon, x, reduction='none').sum(dim=1)
-                
-            # KL
-            kl_loss = self.kl_vmf(kappa).mean()
             
             # ELBO Loss term (Negative ELBO)
-            # We want to minimize: -ELBO = Recon + beta * KL
-            elbo_loss_term = recon_loss + beta_kl * kl_loss
+            elbo_loss_term = recon_loss + beta_kl * kl_val
             
             # Weight by probability q(y=y_idx|x)
-            # w_elbo: [batch]
             w_elbo = probs[:, y_idx] * elbo_loss_term
             total_weighted_elbo_loss += w_elbo
 
         # 3. Entropy of q(y|x) (Regularization term)
-        # in Kingma M2: L = E_q(y|x)[L(x,y)] + H(q(y|x))
-        # Since we minimize Loss = -L, we minimize:
-        # Sum [q(y) * (-L(x,y))] - H(q(y))
-        
         entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=1)
         
         # Final average over batch
@@ -850,41 +847,50 @@ class GaussianVAE_M2(nn.Module):
         print(f"\nMoving Categorical Dist to {self.device}")
         self.cat_dist = torch.distributions.Categorical(torch.tensor([1/self.n_clusters]*self.n_clusters, device=self.device))
 
-    def encode(self, x):
-        h = self.encoder(x)
+    def encode(self, x, y=None):
         logits = self.cluster_block(x)
-        return self.mu_encoder(torch.cat([h,logits], dim=1)), self.logvar_encoder(h), logits
+        if y is None:
+            y = F.softmax(logits, dim=1)
+            
+        h = self.encoder(x)
+        # Condition on y
+        mu = self.mu_encoder(torch.cat([h, y], dim=1))
+        logvar = self.logvar_encoder(h)
+        return mu, logvar, logits
     
-    def decode(self, logits, z):
-        return self.decoder(torch.cat([z,logits], dim=1))
+    def decode(self, z, y):
+        # Condition on z and y
+        return self.decoder(torch.cat([z, y], dim=1))
     
     def reparameterize(self, mu, logvar):
         std = torch.exp(0.5 * logvar)
         return sample_gaussian(mu, std)
     
-    def forward(self, x):
-        mu, logvar, logits = self.encode(x)
+    def forward(self, x, y=None):
+        mu, logvar, logits = self.encode(x, y)
         z = self.reparameterize(mu, logvar)
-        x_recon = self.decode(logits, z)
+        
+        y_used = y if y is not None else F.softmax(logits, dim=1)
+        x_recon = self.decode(z, y_used)
         return x_recon, mu, logvar, logits
     
     def reconstruction_loss(self, x_recon, x):
         return self.recon_loss_fn(x_recon, x)
     
     def full_step(self, x, y, beta_kl, alpha):
-        N = x.size(1)
-        x_recon, mu, logvar, logits = self.forward(x)
+        # Convert indices to one-hot
+        y_onehot = F.one_hot(y, num_classes=self.n_clusters).float()
+        
+        # Pass ground truth y
+        x_recon, mu, logvar, logits = self.forward(x, y=y_onehot)
     
-        # Classification Loss (Cross Entropy)
         classif_loss = F.cross_entropy(logits, y)
-
         recon_loss = self.reconstruction_loss(x_recon, x)
+        
+        # KL for Gaussian
         kl_loss = 0.5 * (-1 - logvar + mu.pow(2) + logvar.exp()) 
-        # >> RAPH: for each input we compute the formula for log q/p when q and p are gaussians
         kl_loss = kl_loss.sum(dim=1).mean()
-        # >> RAPH: sum over dimensions, we then take the expected value (estimated over the batch)
 
-        # LOSS = - ELBO + alpha * classif_loss= - (recon - beta * KL) + alpha * classif_loss voir Kingma 2014 SemiSupervised
         loss = recon_loss + beta_kl * kl_loss + alpha * classif_loss
         return loss, dict(recon=recon_loss.detach(),
                           kl=kl_loss.detach(),
@@ -893,50 +899,37 @@ class GaussianVAE_M2(nn.Module):
     def unlabeled_full_step(self, x, beta_kl):
         """
         UNLABELED STEP (Marginalization)
-        Loss = Sum_y [ q(y|x) * ( -ELBO(x,y) ) ] - H(q(y|x))
         """
-        # 1. Get class probabilities q(y|x)
         logits = self.cluster_block(x)
-        probs = F.softmax(logits, dim=1) # [batch, n_clusters]
+        probs = F.softmax(logits, dim=1) 
         
         total_weighted_elbo_loss = 0
         
-        # 2. Iterate over all possible classes y
         for y_idx in range(self.n_clusters):
-            # Create a batch of y_idx (one-hot)
+            # Create CONSTANT one-hot vector
             y_target = torch.full((x.size(0),), y_idx, dtype=torch.long, device=self.device)
             y_onehot = F.one_hot(y_target, num_classes=self.n_clusters).float()
             
-            # Run VAE as if this class was the truth
-            x_recon, mu, logvar, logits = self.forward(x)
+            # Run VAE conditioned on specific y
+            # We must re-run encode/sample/decode here because mu depends on y!
+            mu, logvar, _ = self.encode(x, y=y_onehot)
+            z = self.reparameterize(mu, logvar)
+            x_recon = self.decode(z, y_onehot)
             
-            # Calculate losses per item (reduction='none')
-            # Recon
             if self.recon_loss_fn == mse_loss:
                 recon_loss = F.mse_loss(x_recon, x, reduction='none').sum(dim=1)
             else:
                 recon_loss = F.binary_cross_entropy(x_recon, x, reduction='none').sum(dim=1)
                 
-            # KL
             kl_loss = 0.5 * (-1 - logvar + mu.pow(2) + logvar.exp()).sum(dim=1)
             
-            # ELBO Loss term (Negative ELBO)
-            # We want to minimize: -ELBO = Recon + beta * KL
             elbo_loss_term = recon_loss + beta_kl * kl_loss
             
-            # Weight by probability q(y=y_idx|x)
-            # w_elbo: [batch]
             w_elbo = probs[:, y_idx] * elbo_loss_term
             total_weighted_elbo_loss += w_elbo
 
-        # 3. Entropy of q(y|x) (Regularization term)
-        # in Kingma M2: L = E_q(y|x)[L(x,y)] + H(q(y|x))
-        # Since we minimize Loss = -L, we minimize:
-        # Sum [q(y) * (-L(x,y))] - H(q(y))
-        
         entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=1)
         
-        # Final average over batch
         loss_u = torch.mean(total_weighted_elbo_loss - entropy)
         
         return loss_u, dict(loss_u=loss_u.detach(), entropy=entropy.mean().detach())
@@ -1240,30 +1233,51 @@ class M1_M2:
         x_recon = self.decode(z)
         return x_recon, param1, param2
     
-    def encode_M2(self, z1):
-        return self.vae_m2.encode(z1)
+    def encode_M2(self, z1, y=None):
+        return self.vae_m2.encode(z1, y)
 
-    def decode_M2(self, logits, z2):
-        return self.vae_m2.decode(logits, z2)
+    def decode_M2(self, z2, y):
+        return self.vae_m2.decode(z2, y)
 
-    def forward_M2(self, z1):
-        param1, param2, logits = self.encode_M2(z1)
+    def forward_M2(self, z1, y=None):
+        param1, param2, logits = self.encode_M2(z1, y)
         z = self.sample(param1, param2)
-        x_recon = self.decode(logits, z)
+        
+        y_used = y if y is not None else F.softmax(logits, dim=1)
+        x_recon = self.decode(z, y_used)
         return x_recon, param1, param2, logits
     
-    def forward(self, x):
+    def forward(self, x, y=None):
+        # M1 Step
         param1_M1, param2_M1 = self.encode_M1(x)
-        z1 = self.sample(param1_M1, param2_M1)
-        x_recon = self.decode(z1)
+        z1 = self.sample_M1(param1_M1, param2_M1) # Need to helper or direct call
+        # Note: self.sample helper is tricky because M1 and M2 might have diff sample types
+        # Safest to call .sample on respective vaes or rename sample methods
+        
+        x_recon = self.vae_m1.decode(z1)
 
-        param1_M2, param2_M2, logits = self.encode_M2(z1)
-        z2 = self.sample(param1_M2, param2_M2)
-        z1_recon = self.decode(logits, z2)
+        # M2 Step
+        param1_M2, param2_M2, logits = self.encode_M2(z1, y)
+        # Sample M2
+        if isinstance(self.vae_m2, SVAE_M2):
+            z2 = self.vae_m2.sample(param1_M2, param2_M2)
+        else: # Gaussian
+            z2 = self.vae_m2.reparameterize(param1_M2, param2_M2)
+            
+        y_used = y if y is not None else F.softmax(logits, dim=1)
+        z1_recon = self.decode_M2(z2, y_used)
         return x_recon, param1_M1, param2_M1, z1_recon, param1_M2, param2_M2, logits
+    
+    # Helpers for sampling based on type
+    def sample_M1(self, p1, p2):
+        if isinstance(self.vae_m1, SVAE):
+            return self.vae_m1.sample(p1, p2)
+        else:
+            return self.vae_m1.reparameterize(p1, p2)
 
     def labeled_full_step(self, x, y, beta_kl, alpha):
         M1_loss, M1_dict, z1 = self.vae_m1.full_step(x, beta_kl, return_latent=True)
+        # Pass y to M2
         M2_loss, M2_dict = self.vae_m2.full_step(z1, y, beta_kl, alpha)
 
         loss = M1_loss + M2_loss
@@ -1272,6 +1286,7 @@ class M1_M2:
 
     def unlabeled_full_step(self, x, beta_kl):
         M1_loss, M1_dict, z1 = self.vae_m1.full_step(x, beta_kl, return_latent=True)
+        # Unlabeled M2 Step
         M2_loss, M2_dict = self.vae_m2.unlabeled_full_step(z1, beta_kl)
 
         loss = M1_loss + M2_loss
@@ -1288,6 +1303,7 @@ class M1_M2:
         _, z1_input, _ = self.vae_m1.get_latent(data_tensor, mode, verbose=False)
         
         # M2 inference
+        # Unsupervised -> y=None
         latent_M2, _, _, logits = self.vae_m2.get_latent(z1_input, mode, verbose=False)
         
         y_hat = torch.argmax(logits, dim=1).detach().cpu().numpy()
