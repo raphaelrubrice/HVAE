@@ -700,9 +700,6 @@ class SVAE_M2(nn.Module):
         probs = F.softmax(logits, dim=1) # [batch, n_clusters]
         
         total_weighted_elbo_loss = 0
-        
-        # KL is constant wrt to y because kappa does not depend on y !
-        kl_val = self.kl_vmf(kappa) # [batch] size
 
         # 2. Iterate over all possible classes y (Enumeration)
         for y_idx in range(self.n_clusters):
@@ -723,6 +720,9 @@ class SVAE_M2(nn.Module):
             else:
                 recon_loss = F.binary_cross_entropy(x_recon, x, reduction='none').sum(dim=1)
             
+            # KL is constant wrt to y because kappa does not depend on y !
+            kl_val = self.kl_vmf(kappa) # [batch] size
+
             # ELBO Loss term (Negative ELBO)
             elbo_loss_term = recon_loss + beta_kl * kl_val
             
