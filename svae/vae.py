@@ -718,7 +718,7 @@ class SVAE_M2(nn.Module):
             if self.recon_loss_fn == mse_loss:
                 recon_loss = F.mse_loss(x_recon, x, reduction='none').sum(dim=1)
             else:
-                recon_loss = F.binary_cross_entropy(x_recon, x, reduction='none').sum(dim=1)
+                recon_loss = F.binary_cross_entropy_with_logits(x_recon, x, reduction='none').sum(dim=1)
             
             # KL is constant wrt to y because kappa does not depend on y !
             kl_val = self.kl_vmf(kappa) # [batch] size
@@ -919,7 +919,7 @@ class GaussianVAE_M2(nn.Module):
             if self.recon_loss_fn == mse_loss:
                 recon_loss = F.mse_loss(x_recon, x, reduction='none').sum(dim=1)
             else:
-                recon_loss = F.binary_cross_entropy(x_recon, x, reduction='none').sum(dim=1)
+                recon_loss = F.binary_cross_entropy_with_logits(x_recon, x, reduction='none').sum(dim=1)
                 
             kl_loss = 0.5 * (-1 - logvar + mu.pow(2) + logvar.exp()).sum(dim=1)
             
@@ -1281,6 +1281,9 @@ class M1_M2:
         M2_loss, M2_dict = self.vae_m2.full_step(z1, y, beta_kl, alpha)
 
         loss = M1_loss + M2_loss
+        # print("Labeled")
+        # print("M1:", M1_dict)
+        # print("M2:", M2_dict)
         return loss, dict(M1=M1_loss.detach(),
                           M2=M2_loss.detach())
 
@@ -1290,6 +1293,9 @@ class M1_M2:
         M2_loss, M2_dict = self.vae_m2.unlabeled_full_step(z1, beta_kl)
 
         loss = M1_loss + M2_loss
+        # print("Unlabeled")
+        # print("M1:", M1_dict)
+        # print("M2:", M2_dict)
         return loss, dict(M1=M1_loss.detach(),
                           M2=M2_loss.detach())
     
