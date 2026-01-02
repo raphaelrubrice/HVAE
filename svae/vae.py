@@ -915,9 +915,11 @@ class M1:
         latent_dim: int,
         one_layer: bool = True,
         mode:str='MNIST',
+        N_fit_clf:int = 100,
         **kwargs # for the KNN
         ):
         self.latent_dim = latent_dim
+        self.N_fit_clf = N_fit_clf
 
         # Inner VAE (Gaussian or SVAE)
         if vae_type == "normal":
@@ -948,6 +950,9 @@ class M1:
             raise AttributeError(f"'{type(self).__name__}' object and its 'vae' attribute have no attribute '{name}'")
         
     def fit_clf(self, data_tensor, label_tensor, mode):
+        idx = np.randint(0, data_tensor.size(0), self.N_fit_clf, device=data_tensor.device)
+        data_tensor = data_tensor[idx,:]
+
         _, latent_mu, _ = self.get_latent(data_tensor, mode)
         
         # Ensure mu is on CPU and numpy for sklearn
