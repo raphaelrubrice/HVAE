@@ -8,8 +8,8 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)](https://pytorch.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![MVA: Computational Statistics](https://img.shields.io/badge/MVA-Computational%20Statistics-darkgreen.svg)]([https://opensource.org/licenses/MIT](https://www.master-mva.com/cours/computational-statistics/))
 
-<img src="https://img.shields.io/badge/MVA-Computational%20Statistics-darkgreen.svg" alt="MVA"/>
 
 [Paper](https://arxiv.org/abs/1804.00891) • [Original Code](https://github.com/nicola-decao/s-vae-pytorch) • [Slides](./slides/presentation.pdf)
 
