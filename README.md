@@ -36,7 +36,7 @@ This repository provides a **from-scratch reimplementation** of the S-VAE (Spher
 | KL vanishing with powerful decoders | Better latent utilization |
 
 <details>
-<summary><b>🔬 Key Technical Contributions of the Paper</b></summary>
+<summary><b> Key Technical Contributions of the Paper</b></summary>
 
 1. **Learnable concentration** $\kappa$ (vs. fixed in prior work)
 2. **Reparameterization trick** for vMF via acceptance-rejection (Lemma 2)
